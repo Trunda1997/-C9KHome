@@ -24,7 +24,12 @@ jobs:
           gradle-version: '8.13'
       - name: Build debug APK
         run: gradle :app:assembleDebug
+      - name: Name V0.4 APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/TCL Home Test V0.4.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: C9KHome-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: TCL Home Test V0.4
+          path: dist/TCL Home Test V0.4.apk
+          if-no-files-found: error

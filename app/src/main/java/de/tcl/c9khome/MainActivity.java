@@ -24,6 +24,7 @@ import android.widget.TextView;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
@@ -45,6 +46,11 @@ public class MainActivity extends Activity {
     private boolean initialFocusAssigned;
     private TextView clock;
     private HdmiRepository hdmiRepository;
+    private FavoriteApps favoriteApps;
+    private List<String> moveOrder;
+    private String movingPackage;
+    private View movingTile;
+    private TextView favoriteHint;
     private final Handler handler = new Handler();
 
     @Override protected void onCreate(Bundle savedInstanceState) {
@@ -52,6 +58,7 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         hdmiRepository = new HdmiRepository(this);
+        favoriteApps = new FavoriteApps(this);
         if (savedInstanceState != null) {
             try { currentPage = Page.valueOf(savedInstanceState.getString("page", "HOME")); }
             catch (IllegalArgumentException ignored) {}
@@ -59,7 +66,7 @@ public class MainActivity extends Activity {
         buildUi();
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::returnHome);
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
         }
     }
 
@@ -70,6 +77,7 @@ public class MainActivity extends Activity {
             connectPageFocus();
         });
         installedApps = LaunchableApps.load(this);
+        favoriteApps.initializeIfMissing(installedApps);
         renderPage();
         if (!initialFocusAssigned) {
             focusAndReveal(firstContent(), View.FOCUS_DOWN);
@@ -79,6 +87,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onStop() {
+        if (moveOrder != null) finishMove(false);
         hdmiRepository.stop();
         handler.removeCallbacks(clockTick);
         super.onStop();
@@ -96,7 +105,12 @@ public class MainActivity extends Activity {
         super.onSaveInstanceState(outState);
     }
 
-    @Override public void onBackPressed() { returnHome(); }
+    @Override public void onBackPressed() { handleBack(); }
+
+    private void handleBack() {
+        if (moveOrder != null) finishMove(false);
+        else returnHome();
+    }
 
     private void returnHome() {
         showPage(Page.HOME);
@@ -129,6 +143,7 @@ public class MainActivity extends Activity {
     }
 
     private void showPage(Page page) {
+        if (moveOrder != null) finishMove(false);
         // Also catch installs/removals that happened while the launcher stayed
         // in the foreground (for example through ADB).
         if (page == Page.APPS) installedApps = LaunchableApps.load(this);
@@ -146,6 +161,7 @@ public class MainActivity extends Activity {
         hdmiRow = null;
         appsRow = null;
         allAppsGrid = null;
+        favoriteHint = null;
         horizontalRows.clear();
         pageHost.removeAllViews();
         LinearLayout page = new LinearLayout(this);
@@ -159,8 +175,8 @@ public class MainActivity extends Activity {
         switch (currentPage) {
             case HOME: buildHomePage(page); break;
             case APPS: buildAppsPage(page); break;
-            case MOVIES: buildMediaPage(page, "Filme", "Hier entsteht deine Filmübersicht."); break;
-            case SERIES: buildMediaPage(page, "Serien", "Hier entsteht deine Serienübersicht."); break;
+            case MOVIES: buildMediaPage(page, "Filme", "Medieninhalte werden später integriert."); break;
+            case SERIES: buildMediaPage(page, "Serien", "Medieninhalte werden später integriert."); break;
             case LIVE_TV: buildLiveTvPage(page); break;
         }
         updateActiveMenu();
@@ -180,6 +196,11 @@ public class MainActivity extends Activity {
 
     private void buildHomePage(LinearLayout page) {
         addSection(page, "Meine Apps");
+        favoriteHint = text("Langes OK: Favoriten verschieben oder entfernen", 14, false);
+        favoriteHint.setId(R.id.favorites_sort_hint);
+        favoriteHint.setTextColor(Color.LTGRAY);
+        favoriteHint.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        page.addView(favoriteHint);
         appsRow = addHorizontalRow(page);
         appsRow.setId(R.id.apps_row);
         refreshApps();
@@ -190,8 +211,8 @@ public class MainActivity extends Activity {
         addSpacer(page, 26);
         addSection(page, "System");
         LinearLayout systemRow = addHorizontalRow(page);
+        systemRow.setId(R.id.system_row);
         systemRow.addView(createActionTile("Google Play Store", R.drawable.logo_playstore, v -> LauncherUtils.openPlayStore(this)));
-        systemRow.addView(createActionTile("Einstellungen", R.drawable.logo_settings, v -> LauncherUtils.openSettings(this)));
         systemRow.addView(createActionTile("TCL Eingänge", R.drawable.logo_hdmi, v -> {
             try { startActivity(new Intent(Settings.ACTION_SETTINGS)); }
             catch (Exception ignored) {}
@@ -245,9 +266,13 @@ public class MainActivity extends Activity {
     }
 
     private void addBackHome(LinearLayout page) {
-        View home = createActionTile("Zur Startseite", R.drawable.app_icon, v -> returnHome());
+        TextView home = text("← Zur Startseite", 17, true);
+        home.setPadding(dp(20), 0, dp(20), 0);
+        home.setFocusable(true);
+        home.setOnClickListener(v -> returnHome());
+        applyFocus(home);
         home.setId(R.id.page_back_home);
-        addHorizontalRow(page).addView(home);
+        addHorizontalRow(page).addView(home, new LinearLayout.LayoutParams(dp(230), dp(64)));
     }
 
     private void addDescription(LinearLayout page, String description) {
@@ -396,6 +421,7 @@ public class MainActivity extends Activity {
         item.setNextFocusUpId(up.getId());
         item.setNextFocusDownId(down.getId());
         item.setOnKeyListener((v, keyCode, event) -> {
+            if (moveOrder != null && item == movingTile) return handleMoveKey(keyCode, event);
             View target;
             int direction;
             switch (keyCode) {
@@ -486,8 +512,12 @@ public class MainActivity extends Activity {
         name.setSingleLine(true);
         tile.addView(name, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(35)));
         tile.setContentDescription(entry.label);
-        tile.setTag(entry.component.flattenToString());
+        tile.setTag(entry.packageName);
         tile.setOnClickListener(v -> entry.launch(this));
+        tile.setOnLongClickListener(v -> {
+            showFavoriteMenu(entry, tile);
+            return true;
+        });
         applyFocus(tile);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(180), dp(135));
         lp.setMargins(0, 0, dp(14), 0);
@@ -498,12 +528,106 @@ public class MainActivity extends Activity {
     private void refreshApps() {
         if (appsRow == null) return;
         appsRow.removeAllViews();
-        for (int i = 0; i < Math.min(12, installedApps.size()); i++) {
-            appsRow.addView(createAppTile(installedApps.get(i)));
+        List<String> packages = moveOrder == null ? favoriteApps.getPackages() : moveOrder;
+        for (String packageName : packages) {
+            for (LaunchableApps.Entry entry : installedApps) {
+                if (packageName.equals(entry.packageName)) {
+                    appsRow.addView(createAppTile(entry));
+                    break;
+                }
+            }
         }
         View allApps = createActionTile("Alle Apps", R.drawable.logo_playstore, v -> showPage(Page.APPS));
         allApps.setId(R.id.home_all_apps);
         appsRow.addView(allApps);
+        if (favoriteHint != null) favoriteHint.setText(appsRow.getChildCount() == 1
+                ? "Füge über Apps mit langem OK deine Favoriten hinzu."
+                : "Langes OK: Favoriten verschieben oder entfernen");
+    }
+
+    private void showFavoriteMenu(LaunchableApps.Entry entry, View tile) {
+        if (currentPage == Page.HOME) {
+            new AlertDialog.Builder(this).setTitle(entry.label)
+                    .setItems(new String[]{"Verschieben", "Von Startseite entfernen"}, (dialog, which) -> {
+                        if (which == 0) beginMove(entry.packageName, tile);
+                        else {
+                            int index = appsRow.indexOfChild(tile);
+                            favoriteApps.remove(entry.packageName);
+                            refreshFavoriteRow(null, index);
+                        }
+                    }).show();
+        } else if (currentPage == Page.APPS) {
+            boolean exists = favoriteApps.contains(entry.packageName);
+            new AlertDialog.Builder(this).setTitle(entry.label)
+                    .setItems(new String[]{exists ? "Von Startseite entfernen" : "Zur Startseite hinzufügen"},
+                            (dialog, which) -> {
+                                if (exists) favoriteApps.remove(entry.packageName);
+                                else favoriteApps.add(entry.packageName);
+                            }).show();
+        }
+    }
+
+    private void refreshFavoriteRow(String preferredPackage, int fallbackIndex) {
+        refreshApps();
+        connectPageFocus();
+        View target = null;
+        if (preferredPackage != null) {
+            for (int i = 0; i < appsRow.getChildCount(); i++) {
+                View item = appsRow.getChildAt(i);
+                if (preferredPackage.equals(item.getTag())) target = item;
+            }
+        }
+        if (target == null) target = appsRow.getChildAt(Math.max(0,
+                Math.min(fallbackIndex, appsRow.getChildCount() - 1)));
+        focusAndReveal(target, View.FOCUS_DOWN);
+    }
+
+    private void beginMove(String packageName, View tile) {
+        moveOrder = favoriteApps.getPackages();
+        movingPackage = packageName;
+        movingTile = tile;
+        movingTile.setActivated(true);
+        updateFocusAppearance(movingTile);
+        favoriteHint.setText("Verschieben: ◀ / ▶ · OK speichern · Zurück abbrechen");
+        focusAndReveal(movingTile, View.FOCUS_DOWN);
+    }
+
+    private boolean handleMoveKey(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                int from = appsRow.indexOfChild(movingTile);
+                int to = from + (keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : 1);
+                if (to >= 0 && to < appsRow.getChildCount() - 1) {
+                    String neighbor = (String) appsRow.getChildAt(to).getTag();
+                    Collections.swap(moveOrder, moveOrder.indexOf(movingPackage), moveOrder.indexOf(neighbor));
+                    appsRow.removeView(movingTile);
+                    appsRow.addView(movingTile, to);
+                    connectPageFocus();
+                    focusAndReveal(movingTile, to < from ? View.FOCUS_LEFT : View.FOCUS_RIGHT);
+                }
+            }
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
+                || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+            if (event.getAction() == KeyEvent.ACTION_UP) finishMove(true);
+            return true;
+        }
+        // Stay on the moving tile until OK or Back finishes the operation.
+        return keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN;
+    }
+
+    private void finishMove(boolean save) {
+        String packageName = movingPackage;
+        if (save) favoriteApps.setPackages(moveOrder);
+        if (movingTile != null) {
+            movingTile.setActivated(false);
+            updateFocusAppearance(movingTile);
+        }
+        moveOrder = null;
+        movingPackage = null;
+        movingTile = null;
+        if (appsRow != null) refreshFavoriteRow(packageName, 0);
     }
 
     private LinearLayout addHorizontalRow(LinearLayout parent) {
@@ -558,12 +682,14 @@ public class MainActivity extends Activity {
         boolean focused = view.hasFocus();
         boolean selected = view.isSelected();
         boolean menu = view instanceof TextView;
+        boolean moving = view.isActivated();
         float scale = !menu && focused ? 1.07f : 1f;
         view.animate().scaleX(scale).scaleY(scale).setDuration(120).start();
         int active = Color.rgb(29, 64, 87);
-        GradientDrawable background = roundRect(focused ? TILE_FOCUS :
+        GradientDrawable background = roundRect(moving ? Color.rgb(103, 71, 13) : focused ? TILE_FOCUS :
                 (selected ? active : (menu ? Color.TRANSPARENT : TILE)), menu ? 10 : 18);
-        if (focused || selected) background.setStroke(dp(2), focused ? Color.WHITE : Color.rgb(102, 209, 255));
+        if (moving || focused || selected) background.setStroke(dp(moving ? 4 : 2), moving ?
+                Color.rgb(255, 204, 64) : focused ? Color.WHITE : Color.rgb(102, 209, 255));
         view.setBackground(background);
         view.setElevation(focused ? dp(10) : 0);
         if (menu) {

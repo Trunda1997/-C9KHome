@@ -1,32 +1,45 @@
 package de.tcl.c9khome;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import android.content.ContentValues;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 import android.net.Uri;
 import android.os.SystemClock;
 import android.provider.MediaStore;
 import android.view.KeyEvent;
+import android.view.ViewConfiguration;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.HorizontalScrollView;
 import android.widget.GridLayout;
 import android.widget.ScrollView;
+import android.widget.TextView;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.LargeTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.uiautomator.UiDevice;
+import androidx.test.uiautomator.By;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.text.Collator;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -56,6 +69,12 @@ public final class FocusNavigationTest {
 
     @Before public void launchLauncher() {
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
+        // Test setup seeds real packages; UI navigation below uses keys only.
+        List<String> favorites = new ArrayList<>();
+        for (LaunchableApps.Entry entry : LaunchableApps.load(targetContext())) {
+            if (!favorites.contains(entry.packageName)) favorites.add(entry.packageName);
+        }
+        new FavoriteApps(targetContext()).setPackages(favorites);
         scenario = ActivityScenario.launch(MainActivity.class);
         scenario.onActivity(activity -> originalActivity = activity);
         assertFirstAppFocused();
@@ -112,18 +131,19 @@ public final class FocusNavigationTest {
     @Test public void horizontallyScrolledAppsCanExitUpAndReturnToTheVisibleFirstApp() {
         AtomicInteger appCount = new AtomicInteger();
         scenario.onActivity(activity -> appCount.set(appsRow(activity).getChildCount()));
-        assertTrue("The test APK must supply enough TV app entries to exercise scrolling", appCount.get() >= 9);
+        assertTrue("The installed apps and All Apps shortcut must be reachable", appCount.get() > 1);
 
-        int lastIndex = Math.min(9, appCount.get() - 1);
+        int lastIndex = appCount.get() - 1;
         for (int index = 1; index <= lastIndex; index++) {
             key(KeyEvent.KEYCODE_DPAD_RIGHT);
             final int expectedIndex = index;
             awaitActivity("App focus did not move to tile " + index,
                     activity -> activity.getCurrentFocus() == appsRow(activity).getChildAt(expectedIndex));
         }
-        awaitActivity("The apps row did not scroll horizontally", activity -> {
-            HorizontalScrollView scroll = (HorizontalScrollView) appsRow(activity).getParent();
-            return scroll.getScrollX() > 0;
+        awaitActivity("A wide favorites row must scroll to reveal its last tile", activity -> {
+            ViewGroup row = appsRow(activity);
+            HorizontalScrollView scroll = (HorizontalScrollView) row.getParent();
+            return row.getWidth() <= scroll.getWidth() || scroll.getScrollX() > 0;
         });
         screenshot("apps-scrolled-right");
 
@@ -200,65 +220,71 @@ public final class FocusNavigationTest {
         assertSameActivity();
     }
 
-    @Test public void appsPageContainsEveryTestEntryIncludingMobileAppsAndHasNoTwelveAppLimit() {
+    @Test public void appsPageMergesAllActivitiesOfEachPackageAndIncludesBothLauncherCategories() {
         activateFromHome(1);
         assertPageShown(R.id.page_apps);
+        Set<String> expected = new LinkedHashSet<>();
+        PackageManager pm = targetContext().getPackageManager();
+        for (String category : new String[]{Intent.CATEGORY_LEANBACK_LAUNCHER, Intent.CATEGORY_LAUNCHER}) {
+            for (ResolveInfo info : pm.queryIntentActivities(new Intent(Intent.ACTION_MAIN).addCategory(category), 0)) {
+                if (info.activityInfo == null || !info.activityInfo.exported || !info.activityInfo.enabled
+                        || !info.activityInfo.applicationInfo.enabled) continue;
+                String pkg = info.activityInfo.packageName;
+                if (APP_PACKAGE.equals(pkg)) continue;
+                if (info.activityInfo.permission != null && pm.checkPermission(info.activityInfo.permission,
+                        APP_PACKAGE) != PackageManager.PERMISSION_GRANTED) continue;
+                if (pm.getLeanbackLaunchIntentForPackage(pkg) != null || pm.getLaunchIntentForPackage(pkg) != null) {
+                    expected.add(pkg);
+                }
+            }
+        }
         scenario.onActivity(activity -> {
             GridLayout grid = appsGrid(activity);
-            assertTrue("Apps page must not use the twelve-app home limit", grid.getChildCount() > 12);
-            Set<String> components = new HashSet<>();
-            Set<String> labels = new HashSet<>();
+            Set<String> packages = new HashSet<>();
+            Collator collator = Collator.getInstance(Locale.GERMANY);
+            String previousLabel = null;
             for (int index = 0; index < grid.getChildCount(); index++) {
                 View tile = grid.getChildAt(index);
                 assertTrue("Every app entry must be focusable", tile.isFocusable());
-                assertNotNull("Every tile must identify its launch component", tile.getTag());
-                assertTrue("The same component must appear only once", components.add(tile.getTag().toString()));
-                assertNotNull("Every tile must have an app label", tile.getContentDescription());
-                labels.add(tile.getContentDescription().toString());
+                assertNotNull("Every tile must identify its package", tile.getTag());
+                assertTrue("A package with several launcher activities must appear once",
+                        packages.add(tile.getTag().toString()));
+                String label = tile.getContentDescription().toString();
+                if (previousLabel != null) assertTrue("Full app list must be alphabetical",
+                        collator.compare(previousLabel, label) <= 0);
+                previousLabel = label;
             }
-            for (int index = 1; index <= 12; index++) {
-                assertTrue("Missing installed TV app fixture " + index,
-                        labels.contains(String.format(java.util.Locale.ROOT, "Focus fixture %02d", index)));
-            }
-            assertTrue("Apps with a regular LAUNCHER entry must also be included", labels.contains("Mobile fixture"));
+            assertEquals("Include all startable packages from both launcher categories", expected, packages);
+            assertFalse("C9KHome must not list itself", packages.contains(APP_PACKAGE));
+            assertTrue("All fixture aliases must merge into their single package",
+                    packages.contains(fixturePackage()));
             assertTrue("Use a complete app grid", grid.getColumnCount() >= 4);
         });
         key(KeyEvent.KEYCODE_DPAD_DOWN);
         assertGridItemFocused(0);
         AtomicInteger columns = new AtomicInteger();
-        scenario.onActivity(activity -> columns.set(appsGrid(activity).getColumnCount()));
-        key(KeyEvent.KEYCODE_DPAD_DOWN);
-        assertGridItemFocused(columns.get());
-        key(KeyEvent.KEYCODE_DPAD_UP);
-        assertGridItemFocused(0);
+        AtomicInteger count = new AtomicInteger();
+        scenario.onActivity(activity -> {
+            columns.set(appsGrid(activity).getColumnCount());
+            count.set(appsGrid(activity).getChildCount());
+        });
+        if (count.get() > columns.get()) {
+            key(KeyEvent.KEYCODE_DPAD_DOWN);
+            assertGridItemFocused(columns.get());
+            key(KeyEvent.KEYCODE_DPAD_UP);
+            assertGridItemFocused(0);
+        }
         key(KeyEvent.KEYCODE_DPAD_UP);
         assertFocused(R.id.top_bar_apps);
         assertSameActivity();
     }
 
-    @Test public void aMobileAppCanBeStartedWithOkAndBackReturnsToAppsPage() {
+    @Test public void aMergedPackageCanBeStartedWithOkAndBackReturnsToAppsPage() {
         activateFromHome(1);
-        AtomicInteger mobileIndex = new AtomicInteger(-1);
-        AtomicInteger columns = new AtomicInteger();
-        scenario.onActivity(activity -> {
-            GridLayout grid = appsGrid(activity);
-            columns.set(grid.getColumnCount());
-            for (int index = 0; index < grid.getChildCount(); index++) {
-                if ("Mobile fixture".contentEquals(grid.getChildAt(index).getContentDescription())) {
-                    mobileIndex.set(index);
-                    break;
-                }
-            }
-        });
-        assertTrue("Mobile-only fixture must be available", mobileIndex.get() >= 0);
-        key(KeyEvent.KEYCODE_DPAD_DOWN);
-        for (int row = 0; row < mobileIndex.get() / columns.get(); row++) key(KeyEvent.KEYCODE_DPAD_DOWN);
-        for (int column = 0; column < mobileIndex.get() % columns.get(); column++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
-        assertGridItemFocused(mobileIndex.get());
+        focusGridPackage(fixturePackage());
         key(KeyEvent.KEYCODE_DPAD_CENTER);
         awaitPackage(false);
-        assertTrue("OK must start the selected fixture activity", InstrumentationRegistry.getInstrumentation()
-                .getContext().getPackageName().equals(device.getCurrentPackageName()));
+        assertEquals("OK must start the package's launcher entry point", fixturePackage(), device.getCurrentPackageName());
         key(KeyEvent.KEYCODE_BACK);
         awaitPackage(true);
         assertPageShown(R.id.page_apps);
@@ -314,6 +340,240 @@ public final class FocusNavigationTest {
         key(KeyEvent.KEYCODE_BACK);
         assertPageShown(R.id.page_home);
         assertSameActivity();
+    }
+
+    @Test public void longOkAddsAndRemovesFavoritesImmediatelyOnBothPages() {
+        String pkg = fixturePackage();
+        activateFromHome(1);
+        focusGridPackage(pkg);
+        longOk();
+        awaitDialog("Von Startseite entfernen");
+        chooseDialogItem(0);
+        assertFalse(new FavoriteApps(targetContext()).contains(pkg));
+        key(KeyEvent.KEYCODE_BACK);
+        assertHomePackageAbsent(pkg);
+
+        activateFromHome(1);
+        focusGridPackage(pkg);
+        longOk();
+        awaitDialog("Zur Startseite hinzufügen");
+        chooseDialogItem(0);
+        assertTrue(new FavoriteApps(targetContext()).contains(pkg));
+        key(KeyEvent.KEYCODE_BACK);
+        assertHomePackagePresent(pkg);
+
+        focusHomePackage(pkg);
+        longOk();
+        awaitDialog("Verschieben");
+        awaitDialog("Von Startseite entfernen");
+        chooseDialogItem(1);
+        assertFalse(new FavoriteApps(targetContext()).contains(pkg));
+        assertHomePackageAbsent(pkg);
+        assertTrue("Long OK must open a menu rather than launch the app", APP_PACKAGE.equals(device.getCurrentPackageName()));
+    }
+
+    @Test public void moveModeSavesOrderWithOkAndRetainsItAfterRecreation() {
+        List<String> before = new FavoriteApps(targetContext()).getPackages();
+        assertTrue("At least two installed packages are needed to reorder", before.size() >= 2);
+        String moving = before.get(0);
+        longOk();
+        awaitDialog("Verschieben");
+        chooseDialogItem(0);
+        assertMovingPackage(moving);
+        screenshot("favorite-moving");
+        key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertMovingPackage(moving);
+        assertHomePackageAt(moving, 1);
+        assertEquals("Reorder is only a draft until OK", before, new FavoriteApps(targetContext()).getPackages());
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        List<String> reordered = new ArrayList<>(before);
+        java.util.Collections.swap(reordered, 0, 1);
+        assertEquals(reordered, new FavoriteApps(targetContext()).getPackages());
+        assertNotMoving();
+        scenario.recreate();
+        awaitActivity("Saved favorite order must survive activity recreation", activity ->
+                homePackages(activity).equals(reordered));
+        assertEquals(reordered, new FavoriteApps(targetContext()).getPackages());
+    }
+
+    @Test public void backCancelsMoveAndRestoresTheOriginalOrder() {
+        List<String> before = new FavoriteApps(targetContext()).getPackages();
+        String moving = before.get(0);
+        longOk();
+        awaitDialog("Verschieben");
+        chooseDialogItem(0);
+        assertMovingPackage(moving);
+        key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertHomePackageAt(moving, 1);
+        key(KeyEvent.KEYCODE_BACK);
+        assertNotMoving();
+        scenario.onActivity(activity -> assertEquals(before, homePackages(activity)));
+        assertEquals("Back must discard the draft order", before, new FavoriteApps(targetContext()).getPackages());
+        assertPageShown(R.id.page_home);
+        assertSameActivity();
+    }
+
+    @Test public void favoritesPersistEmptyListsAndUnlimitedOrderedPackagesWithoutDuplicates() {
+        FavoriteApps favorites = new FavoriteApps(targetContext());
+        favorites.setPackages(new ArrayList<>());
+        favorites.initializeIfMissing(LaunchableApps.load(targetContext()));
+        assertTrue("An intentionally empty list must not seed defaults again", favorites.getPackages().isEmpty());
+        scenario.recreate();
+        awaitActivity("Empty favorites show only the All Apps shortcut", activity ->
+                homePackages(activity).isEmpty() && activity.findViewById(R.id.home_all_apps) != null);
+        assertTrue(new FavoriteApps(targetContext()).getPackages().isEmpty());
+
+        List<String> many = new ArrayList<>();
+        for (int i = 0; i < 40; i++) many.add("test.favorite.package" + i);
+        favorites.setPackages(many);
+        favorites.add(many.get(0));
+        assertEquals("No twelve-app or other artificial favorites limit", many,
+                new FavoriteApps(targetContext()).getPackages());
+        favorites.remove(many.get(7));
+        many.remove(7);
+        assertEquals("Removal must preserve the order of the remaining favorites", many,
+                new FavoriteApps(targetContext()).getPackages());
+    }
+
+    @Test public void homeHasNoFixedSettingsTileAndMediaPagesShowNeutralInformation() {
+        scenario.onActivity(activity -> {
+            assertFalse("The lower fixed Settings tile must be removed", hasText(activity.findViewById(R.id.system_row), "Einstellungen"));
+            assertTrue("Play Store stays available", hasText(activity.findViewById(R.id.system_row), "Google Play Store"));
+            assertTrue("TCL inputs stay available", hasText(activity.findViewById(R.id.system_row), "TCL Eingänge"));
+        });
+        for (int index = 2; index <= 3; index++) {
+            activateFromHome(index);
+            final int pageId = indexPageId(index);
+            scenario.onActivity(activity -> {
+                View page = activity.findViewById(pageId);
+                assertTrue("Media pages must explain that content arrives later",
+                        hasTextContaining(page, "Medieninhalte werden später integriert"));
+                assertFalse("No installed app is presented as media", containsAppTile(page));
+            });
+        }
+    }
+
+    private int indexPageId(int index) { return index == 2 ? R.id.page_movies : R.id.page_series; }
+
+    private boolean hasText(View view, String text) {
+        if (view instanceof TextView && text.contentEquals(((TextView) view).getText())) return true;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) if (hasText(group.getChildAt(i), text)) return true;
+        }
+        return false;
+    }
+
+    private boolean hasTextContaining(View view, String text) {
+        if (view instanceof TextView && ((TextView) view).getText().toString().contains(text)) return true;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) if (hasTextContaining(group.getChildAt(i), text)) return true;
+        }
+        return false;
+    }
+
+    private boolean containsAppTile(View view) {
+        if (view.getTag() instanceof String && view.isFocusable()) return true;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) if (containsAppTile(group.getChildAt(i))) return true;
+        }
+        return false;
+    }
+
+    private Context targetContext() { return InstrumentationRegistry.getInstrumentation().getTargetContext(); }
+    private String fixturePackage() { return InstrumentationRegistry.getInstrumentation().getContext().getPackageName(); }
+
+    private List<String> homePackages(MainActivity activity) {
+        List<String> packages = new ArrayList<>();
+        ViewGroup row = appsRow(activity);
+        for (int i = 0; i < row.getChildCount(); i++) {
+            Object tag = row.getChildAt(i).getTag();
+            if (tag instanceof String) packages.add((String) tag);
+        }
+        return packages;
+    }
+
+    private void assertHomePackagePresent(String pkg) {
+        awaitActivity("Favorite must appear on Home immediately", activity -> homePackages(activity).contains(pkg));
+    }
+
+    private void assertHomePackageAbsent(String pkg) {
+        awaitActivity("Removed favorite must disappear from Home immediately", activity -> !homePackages(activity).contains(pkg));
+    }
+
+    private void assertHomePackageAt(String pkg, int index) {
+        awaitActivity("Expected favorite at position " + index, activity ->
+                pkg.equals(appsRow(activity).getChildAt(index).getTag()));
+    }
+
+    private void assertMovingPackage(String pkg) {
+        awaitActivity("Moving favorite must stay focused and visibly activated", activity -> {
+            View focused = activity.getCurrentFocus();
+            return focused != null && pkg.equals(focused.getTag()) && focused.isActivated();
+        });
+    }
+
+    private void assertNotMoving() {
+        awaitActivity("Moving highlight must end after OK or Back", activity -> {
+            ViewGroup row = appsRow(activity);
+            for (int i = 0; i < row.getChildCount(); i++) if (row.getChildAt(i).isActivated()) return false;
+            return true;
+        });
+    }
+
+    private void focusHomePackage(String pkg) {
+        key(KeyEvent.KEYCODE_BACK);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        AtomicInteger index = new AtomicInteger(-1);
+        scenario.onActivity(activity -> index.set(homePackages(activity).indexOf(pkg)));
+        assertTrue("Favorite package must exist", index.get() >= 0);
+        for (int i = 0; i < index.get(); i++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        awaitActivity("Expected favorite package focus", activity -> pkg.equals(activity.getCurrentFocus().getTag()));
+    }
+
+    private void focusGridPackage(String pkg) {
+        AtomicInteger index = new AtomicInteger(-1);
+        AtomicInteger columns = new AtomicInteger();
+        scenario.onActivity(activity -> {
+            GridLayout grid = appsGrid(activity);
+            columns.set(grid.getColumnCount());
+            for (int i = 0; i < grid.getChildCount(); i++) if (pkg.equals(grid.getChildAt(i).getTag())) index.set(i);
+        });
+        assertTrue("Installed fixture package must exist", index.get() >= 0);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        for (int r = 0; r < index.get() / columns.get(); r++) key(KeyEvent.KEYCODE_DPAD_DOWN);
+        for (int c = 0; c < index.get() % columns.get(); c++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertGridItemFocused(index.get());
+    }
+
+    private void longOk() {
+        long downTime = SystemClock.uptimeMillis();
+        InstrumentationRegistry.getInstrumentation().sendKeySync(
+                new KeyEvent(downTime, downTime, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+        SystemClock.sleep(ViewConfiguration.getLongPressTimeout() + 250L);
+        InstrumentationRegistry.getInstrumentation().sendKeySync(
+                new KeyEvent(downTime, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DPAD_CENTER, 0));
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        device.waitForIdle();
+    }
+
+    private void awaitDialog(String label) {
+        long deadline = SystemClock.uptimeMillis() + TIMEOUT_MS;
+        do {
+            if (device.hasObject(By.text(label))) return;
+            SystemClock.sleep(50);
+        } while (SystemClock.uptimeMillis() < deadline);
+        assertTrue("Expected long-OK menu action: " + label, false);
+    }
+
+    private void chooseDialogItem(int index) {
+        // Clamp to the first menu item before moving to the desired item.
+        key(KeyEvent.KEYCODE_DPAD_UP);
+        key(KeyEvent.KEYCODE_DPAD_UP);
+        for (int i = 0; i < index; i++) key(KeyEvent.KEYCODE_DPAD_DOWN);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
     }
 
     private void activateFromHome(int topIndex) {

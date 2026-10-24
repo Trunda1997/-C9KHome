@@ -16,4 +16,6 @@
     <item name="home_all_apps" type="id" />
     <item name="page_back_home" type="id" />
     <item name="live_tv_open" type="id" />
+    <item name="favorites_sort_hint" type="id" />
+    <item name="system_row" type="id" />
 </resources>
