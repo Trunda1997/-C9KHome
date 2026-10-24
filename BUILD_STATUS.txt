@@ -1,0 +1,3 @@
+C9K Home source prototype created.
+This environment does not contain the Android SDK / Gradle toolchain, so an APK was not compiled here.
+The project is structured for Android Studio and deliberately uses only Android platform APIs at runtime.
