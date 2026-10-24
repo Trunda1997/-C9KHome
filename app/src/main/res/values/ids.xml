@@ -1,0 +1,9 @@
+<resources>
+    <item name="top_bar_home" type="id" />
+    <item name="top_bar_apps" type="id" />
+    <item name="top_bar_movies" type="id" />
+    <item name="top_bar_series" type="id" />
+    <item name="top_bar_live_tv" type="id" />
+    <item name="top_bar_settings" type="id" />
+    <item name="apps_row" type="id" />
+</resources>

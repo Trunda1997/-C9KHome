@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Installed only with the test APK; production app discovery is unchanged. -->
+    <application android:theme="@android:style/Theme.Material.NoActionBar">
+        <activity
+            android:name="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true" />
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture01"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 01">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture02"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 02">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture03"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 03">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture04"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 04">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture05"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 05">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture06"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 06">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture07"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 07">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture08"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 08">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture09"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 09">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture10"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 10">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture11"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 11">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name="de.tcl.c9khome.focus.Fixture12"
+            android:targetActivity="de.tcl.c9khome.focus.FixtureActivity"
+            android:exported="true"
+            android:label="Focus fixture 12">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+    </application>
+</manifest>

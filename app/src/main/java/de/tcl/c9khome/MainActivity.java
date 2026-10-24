@@ -7,12 +7,14 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.media.tv.TvInputManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.provider.Settings;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.HorizontalScrollView;
@@ -33,6 +35,8 @@ public class MainActivity extends Activity {
     private LinearLayout root;
     private LinearLayout hdmiRow;
     private LinearLayout appsRow;
+    private final List<View> topBarItems = new ArrayList<>();
+    private boolean initialFocusAssigned;
     private TextView clock;
     private HdmiRepository hdmiRepository;
     private final Handler handler = new Handler();
@@ -70,9 +74,11 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackground(makeGradient());
+        configureFocusContainer(scroll);
 
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
+        configureFocusContainer(root);
         root.setPadding(dp(48), dp(28), dp(48), dp(40));
         scroll.addView(root, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -80,6 +86,7 @@ public class MainActivity extends Activity {
         addSpacer(26);
         addSection("Meine Apps");
         appsRow = addHorizontalRow();
+        appsRow.setId(R.id.apps_row);
         addSpacer(26);
         addSection("HDMI & Eingänge");
         hdmiRow = addHorizontalRow();
@@ -98,6 +105,7 @@ public class MainActivity extends Activity {
 
     private void buildTopBar() {
         LinearLayout top = new LinearLayout(this);
+        configureFocusContainer(top);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
         root.addView(top, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(58)));
@@ -106,27 +114,110 @@ public class MainActivity extends Activity {
         logo.setTextColor(Color.rgb(255, 54, 54));
         top.addView(logo, new LinearLayout.LayoutParams(dp(120), ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // Keep all six controls in one scrollable strip, even on narrower TVs.
+        HorizontalScrollView navScroll = new HorizontalScrollView(this);
+        configureFocusContainer(navScroll);
+        navScroll.setHorizontalScrollBarEnabled(false);
+        navScroll.setPadding(dp(4), dp(4), dp(4), dp(4));
+        navScroll.setClipToPadding(false);
         LinearLayout nav = new LinearLayout(this);
+        configureFocusContainer(nav);
+        nav.setClipChildren(false);
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams navLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1);
-        top.addView(nav, navLp);
-        for (String n : new String[]{"Startseite", "Apps", "Filme", "Serien", "Live TV"}) {
+        top.addView(navScroll, navLp);
+        navScroll.addView(nav, new HorizontalScrollView.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        String[] labels = {"Startseite", "Apps", "Filme", "Serien", "Live TV"};
+        int[] ids = {R.id.top_bar_home, R.id.top_bar_apps, R.id.top_bar_movies, R.id.top_bar_series, R.id.top_bar_live_tv};
+        for (int i = 0; i < labels.length; i++) {
+            String n = labels[i];
             TextView t = text(n, 17, n.equals("Startseite"));
             t.setPadding(dp(16), 0, dp(16), 0);
-            nav.addView(t);
+            prepareTopBarItem(t, ids[i]);
+            nav.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
+
+        TextView gear = text("⚙", 30, false);
+        gear.setGravity(Gravity.CENTER);
+        gear.setContentDescription("Einstellungen");
+        prepareTopBarItem(gear, R.id.top_bar_settings);
+        gear.setOnClickListener(v -> LauncherUtils.openSettings(this));
+        nav.addView(gear, new LinearLayout.LayoutParams(dp(70), ViewGroup.LayoutParams.MATCH_PARENT));
 
         clock = text("", 16, false);
         clock.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
         top.addView(clock, new LinearLayout.LayoutParams(dp(260), ViewGroup.LayoutParams.MATCH_PARENT));
+    }
 
-        TextView gear = text("⚙", 30, false);
-        gear.setGravity(Gravity.CENTER);
-        gear.setFocusable(true);
-        gear.setOnClickListener(v -> LauncherUtils.openSettings(this));
-        applyFocus(gear);
-        top.addView(gear, new LinearLayout.LayoutParams(dp(70), ViewGroup.LayoutParams.MATCH_PARENT));
+    private void prepareTopBarItem(View item, int id) {
+        item.setId(id);
+        item.setFocusable(true);
+        item.setFocusableInTouchMode(true);
+        applyFocus(item);
+        topBarItems.add(item);
+    }
+
+    private void configureFocusContainer(ViewGroup container) {
+        container.setFocusable(false);
+        container.setFocusableInTouchMode(false);
+        container.setDescendantFocusability(ViewGroup.FOCUS_AFTER_DESCENDANTS);
+    }
+
+    private void focusAndReveal(View target, int direction) {
+        if (target == null || !target.requestFocus(direction)) return;
+        // Explicitly reveal offscreen targets; ScrollView's arrow search can
+        // otherwise scroll without giving the target focus.
+        target.post(() -> {
+            if (target.hasFocus()) target.requestRectangleOnScreen(
+                    new Rect(0, 0, target.getWidth(), target.getHeight()), false);
+        });
+    }
+
+    private void connectAppAndTopBarFocus() {
+        View firstApp = appsRow.getChildAt(0);
+        for (int i = 0; i < topBarItems.size(); i++) {
+            View item = topBarItems.get(i);
+            View left = topBarItems.get(Math.max(0, i - 1));
+            View right = topBarItems.get(Math.min(topBarItems.size() - 1, i + 1));
+            item.setNextFocusLeftId(left.getId());
+            item.setNextFocusRightId(right.getId());
+            item.setNextFocusUpId(item.getId());
+            item.setNextFocusDownId(firstApp.getId());
+            item.setOnKeyListener((v, keyCode, event) -> {
+                int direction;
+                View target;
+                switch (keyCode) {
+                    case KeyEvent.KEYCODE_DPAD_LEFT: target = left; direction = View.FOCUS_LEFT; break;
+                    case KeyEvent.KEYCODE_DPAD_RIGHT: target = right; direction = View.FOCUS_RIGHT; break;
+                    case KeyEvent.KEYCODE_DPAD_UP: target = item; direction = View.FOCUS_UP; break;
+                    case KeyEvent.KEYCODE_DPAD_DOWN: target = appsRow.getChildAt(0); direction = View.FOCUS_DOWN; break;
+                    default: return false;
+                }
+                if (event.getAction() == KeyEvent.ACTION_DOWN) focusAndReveal(target, direction);
+                return true;
+            });
+        }
+        for (int i = 0; i < appsRow.getChildCount(); i++) {
+            View item = appsRow.getChildAt(i);
+            View left = appsRow.getChildAt(Math.max(0, i - 1));
+            View right = appsRow.getChildAt(Math.min(appsRow.getChildCount() - 1, i + 1));
+            item.setNextFocusLeftId(left.getId());
+            item.setNextFocusRightId(right.getId());
+            item.setNextFocusUpId(topBarItems.get(0).getId());
+            item.setOnKeyListener((v, keyCode, event) -> {
+                View target;
+                int direction;
+                switch (keyCode) {
+                    case KeyEvent.KEYCODE_DPAD_UP: target = topBarItems.get(0); direction = View.FOCUS_UP; break;
+                    case KeyEvent.KEYCODE_DPAD_LEFT: target = left; direction = View.FOCUS_LEFT; break;
+                    case KeyEvent.KEYCODE_DPAD_RIGHT: target = right; direction = View.FOCUS_RIGHT; break;
+                    default: return false;
+                }
+                if (event.getAction() == KeyEvent.ACTION_DOWN) focusAndReveal(target, direction);
+                return true;
+            });
+        }
     }
 
     private void refreshHdmi() {
@@ -230,13 +321,26 @@ public class MainActivity extends Activity {
             if (added >= 12) break;
         }
         appsRow.addView(createActionTile("Alle Apps / Store", R.drawable.logo_playstore, v -> LauncherUtils.openPlayStore(this)));
+        // refreshApps replaces the tiles on every onStart, including after
+        // returning from Settings. Never leave focus links pointing at old IDs.
+        for (int i = 0; i < appsRow.getChildCount(); i++) {
+            appsRow.getChildAt(i).setId(View.generateViewId());
+            appsRow.getChildAt(i).setFocusableInTouchMode(true);
+        }
+        connectAppAndTopBarFocus();
+        if (!initialFocusAssigned || getCurrentFocus() == null) {
+            focusAndReveal(appsRow.getChildAt(0), View.FOCUS_DOWN);
+            initialFocusAssigned = true;
+        }
     }
 
     private LinearLayout addHorizontalRow() {
         HorizontalScrollView hsv = new HorizontalScrollView(this);
+        configureFocusContainer(hsv);
         hsv.setHorizontalScrollBarEnabled(false);
         hsv.setClipToPadding(false);
         LinearLayout row = new LinearLayout(this);
+        configureFocusContainer(row);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(dp(2), dp(8), dp(2), dp(8));
         hsv.addView(row, new HorizontalScrollView.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -273,9 +377,13 @@ public class MainActivity extends Activity {
     }
 
     private void applyFocus(View v) {
+        if (v instanceof TextView) v.setBackground(roundRect(Color.TRANSPARENT, 10));
         v.setOnFocusChangeListener((view, hasFocus) -> {
             view.animate().scaleX(hasFocus ? 1.07f : 1f).scaleY(hasFocus ? 1.07f : 1f).setDuration(120).start();
-            if (view instanceof LinearLayout) view.setBackground(roundRect(hasFocus ? TILE_FOCUS : TILE, 18));
+            boolean tile = view instanceof LinearLayout;
+            GradientDrawable background = roundRect(hasFocus ? TILE_FOCUS : (tile ? TILE : Color.TRANSPARENT), tile ? 18 : 10);
+            if (hasFocus) background.setStroke(dp(2), Color.WHITE);
+            view.setBackground(background);
             view.setElevation(hasFocus ? dp(10) : 0);
         });
     }
