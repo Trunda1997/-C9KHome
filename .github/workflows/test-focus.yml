@@ -41,13 +41,7 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none -no-snapshot
-          script: |
-            set +e
-            gradle :app:connectedDebugAndroidTest --stacktrace
-            test_exit_code=$?
-            mkdir -p app/build/reports
-            adb pull /sdcard/Android/data/de.tcl.c9khome/files/focus-screenshots app/build/reports/focus-screenshots || true
-            exit "$test_exit_code"
+          script: bash .github/scripts/run-focus-tests.sh
       - name: Upload test results and focus screenshots
         if: always()
         uses: actions/upload-artifact@v4

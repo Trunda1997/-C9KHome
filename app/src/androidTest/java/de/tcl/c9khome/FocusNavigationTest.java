@@ -4,8 +4,12 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import android.content.ContentValues;
+import android.graphics.Bitmap;
 import android.graphics.Rect;
+import android.net.Uri;
 import android.os.SystemClock;
+import android.provider.MediaStore;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -18,7 +22,8 @@ import androidx.test.filters.LargeTest;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.uiautomator.UiDevice;
 
-import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -231,9 +236,25 @@ public final class FocusNavigationTest {
     }
 
     private void screenshot(String name) {
-        File folder = new File(InstrumentationRegistry.getInstrumentation()
-                .getTargetContext().getExternalFilesDir(null), "focus-screenshots");
-        assertTrue("Could not create screenshot folder", folder.isDirectory() || folder.mkdirs());
-        assertTrue("Could not capture focus screenshot", device.takeScreenshot(new File(folder, name + ".png")));
+        // Shared Pictures survive Gradle uninstalling the test apps at the end
+        // of connectedDebugAndroidTest; app-specific external files do not.
+        Bitmap bitmap = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
+        assertNotNull("Could not capture focus screenshot", bitmap);
+        android.content.ContentResolver resolver = InstrumentationRegistry.getInstrumentation()
+                .getTargetContext().getContentResolver();
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Images.Media.DISPLAY_NAME, name + ".png");
+        values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+        values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/C9KHome-focus");
+        Uri image = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+        assertNotNull("Could not create screenshot output", image);
+        try (OutputStream output = resolver.openOutputStream(image)) {
+            assertNotNull("Could not open screenshot output", output);
+            assertTrue("Could not save screenshot", bitmap.compress(Bitmap.CompressFormat.PNG, 100, output));
+        } catch (IOException e) {
+            throw new AssertionError("Could not save screenshot", e);
+        } finally {
+            bitmap.recycle();
+        }
     }
 }
