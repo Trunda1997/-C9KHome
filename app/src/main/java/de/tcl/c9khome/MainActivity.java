@@ -3,13 +3,11 @@ package de.tcl.c9khome;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.media.tv.TvInputManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.provider.Settings;
@@ -17,6 +15,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.GridLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -35,6 +34,13 @@ public class MainActivity extends Activity {
     private LinearLayout root;
     private LinearLayout hdmiRow;
     private LinearLayout appsRow;
+    private LinearLayout pageHost;
+    private ScrollView pageScroll;
+    private GridLayout allAppsGrid;
+    private final List<ViewGroup> horizontalRows = new ArrayList<>();
+    private List<LaunchableApps.Entry> installedApps = new ArrayList<>();
+    private enum Page { HOME, APPS, MOVIES, SERIES, LIVE_TV }
+    private Page currentPage = Page.HOME;
     private final List<View> topBarItems = new ArrayList<>();
     private boolean initialFocusAssigned;
     private TextView clock;
@@ -46,14 +52,29 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         hdmiRepository = new HdmiRepository(this);
+        if (savedInstanceState != null) {
+            try { currentPage = Page.valueOf(savedInstanceState.getString("page", "HOME")); }
+            catch (IllegalArgumentException ignored) {}
+        }
         buildUi();
+        if (Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::returnHome);
+        }
     }
 
     @Override protected void onStart() {
         super.onStart();
-        hdmiRepository.start(this::refreshHdmi);
-        refreshHdmi();
-        refreshApps();
+        hdmiRepository.start(() -> {
+            refreshHdmi();
+            connectPageFocus();
+        });
+        installedApps = LaunchableApps.load(this);
+        renderPage();
+        if (!initialFocusAssigned) {
+            focusAndReveal(firstContent(), View.FOCUS_DOWN);
+            initialFocusAssigned = true;
+        }
         handler.post(clockTick);
     }
 
@@ -70,37 +91,170 @@ public class MainActivity extends Activity {
         }
     };
 
-    private void buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackground(makeGradient());
-        configureFocusContainer(scroll);
+    @Override protected void onSaveInstanceState(Bundle outState) {
+        outState.putString("page", currentPage.name());
+        super.onSaveInstanceState(outState);
+    }
 
+    @Override public void onBackPressed() { returnHome(); }
+
+    private void returnHome() {
+        showPage(Page.HOME);
+        focusAndReveal(topBarItems.get(0), View.FOCUS_UP);
+    }
+
+    private void buildUi() {
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         configureFocusContainer(root);
-        root.setPadding(dp(48), dp(28), dp(48), dp(40));
-        scroll.addView(root, new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
+        root.setPadding(dp(48), dp(28), dp(48), 0);
+        root.setBackground(makeGradient());
         buildTopBar();
-        addSpacer(26);
-        addSection("Meine Apps");
-        appsRow = addHorizontalRow();
+
+        // Only the page contents scroll. The navigation remains reachable and
+        // visible while switching pages or browsing a long app list.
+        pageScroll = new ScrollView(this);
+        pageScroll.setId(R.id.page_content);
+        pageScroll.setFillViewport(true);
+        configureFocusContainer(pageScroll);
+        root.addView(pageScroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        pageHost = new LinearLayout(this);
+        pageHost.setOrientation(LinearLayout.VERTICAL);
+        pageHost.setPadding(0, dp(26), 0, dp(40));
+        configureFocusContainer(pageHost);
+        pageScroll.addView(pageHost, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        setContentView(root);
+    }
+
+    private void showPage(Page page) {
+        // Also catch installs/removals that happened while the launcher stayed
+        // in the foreground (for example through ADB).
+        if (page == Page.APPS) installedApps = LaunchableApps.load(this);
+        if (currentPage != page || page == Page.APPS || pageHost.getChildCount() == 0) {
+            currentPage = page;
+            renderPage();
+        }
+        pageScroll.scrollTo(0, 0);
+    }
+
+    private void renderPage() {
+        View previousFocus = getCurrentFocus();
+        boolean keepTopFocus = topBarItems.contains(previousFocus);
+        Object previousApp = previousFocus == null ? null : previousFocus.getTag();
+        hdmiRow = null;
+        appsRow = null;
+        allAppsGrid = null;
+        horizontalRows.clear();
+        pageHost.removeAllViews();
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        configureFocusContainer(page);
+        int[] pageIds = {R.id.page_home, R.id.page_apps, R.id.page_movies,
+                R.id.page_series, R.id.page_live_tv};
+        page.setId(pageIds[currentPage.ordinal()]);
+        pageHost.addView(page, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        switch (currentPage) {
+            case HOME: buildHomePage(page); break;
+            case APPS: buildAppsPage(page); break;
+            case MOVIES: buildMediaPage(page, "Filme", "Hier entsteht deine Filmübersicht."); break;
+            case SERIES: buildMediaPage(page, "Serien", "Hier entsteht deine Serienübersicht."); break;
+            case LIVE_TV: buildLiveTvPage(page); break;
+        }
+        updateActiveMenu();
+        connectPageFocus();
+        if (keepTopFocus) {
+            focusAndReveal(previousFocus, View.FOCUS_DOWN);
+        } else {
+            View restore = null;
+            if (previousApp != null) {
+                for (List<View> row : contentRows()) {
+                    for (View item : row) if (previousApp.equals(item.getTag())) restore = item;
+                }
+            }
+            focusAndReveal(restore != null ? restore : firstContent(), View.FOCUS_DOWN);
+        }
+    }
+
+    private void buildHomePage(LinearLayout page) {
+        addSection(page, "Meine Apps");
+        appsRow = addHorizontalRow(page);
         appsRow.setId(R.id.apps_row);
-        addSpacer(26);
-        addSection("HDMI & Eingänge");
-        hdmiRow = addHorizontalRow();
-        addSpacer(26);
-        addSection("System");
-        LinearLayout systemRow = addHorizontalRow();
+        refreshApps();
+        addSpacer(page, 26);
+        addSection(page, "HDMI & Eingänge");
+        hdmiRow = addHorizontalRow(page);
+        refreshHdmi();
+        addSpacer(page, 26);
+        addSection(page, "System");
+        LinearLayout systemRow = addHorizontalRow(page);
         systemRow.addView(createActionTile("Google Play Store", R.drawable.logo_playstore, v -> LauncherUtils.openPlayStore(this)));
         systemRow.addView(createActionTile("Einstellungen", R.drawable.logo_settings, v -> LauncherUtils.openSettings(this)));
         systemRow.addView(createActionTile("TCL Eingänge", R.drawable.logo_hdmi, v -> {
             try { startActivity(new Intent(Settings.ACTION_SETTINGS)); }
             catch (Exception ignored) {}
         }));
+    }
 
-        setContentView(scroll);
+    private void buildAppsPage(LinearLayout page) {
+        addSection(page, "Alle Apps");
+        addDescription(page, installedApps.size() + " startbare Apps – TV-Apps und weitere installierte Apps");
+        allAppsGrid = new GridLayout(this);
+        allAppsGrid.setId(R.id.all_apps_grid);
+        configureFocusContainer(allAppsGrid);
+        int availableDp = (int) (getResources().getDisplayMetrics().widthPixels
+                / getResources().getDisplayMetrics().density) - 96;
+        int columns = Math.max(1, Math.min(6, availableDp / 180));
+        allAppsGrid.setColumnCount(columns);
+        page.addView(allAppsGrid, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        for (int i = 0; i < installedApps.size(); i++) {
+            View tile = createAppTile(installedApps.get(i));
+            GridLayout.LayoutParams lp = new GridLayout.LayoutParams(
+                    GridLayout.spec(i / columns), GridLayout.spec(i % columns, 1f));
+            lp.width = 0;
+            lp.height = dp(150);
+            lp.setMargins(dp(6), dp(8), dp(6), dp(8));
+            allAppsGrid.addView(tile, lp);
+        }
+        if (installedApps.isEmpty()) {
+            addDescription(page, "Es wurden keine startbaren Apps gefunden.");
+            addBackHome(page);
+        }
+    }
+
+    private void buildMediaPage(LinearLayout page, String title, String description) {
+        addSection(page, title);
+        addDescription(page, description);
+        addBackHome(page);
+    }
+
+    private void buildLiveTvPage(LinearLayout page) {
+        addSection(page, "Live TV");
+        addDescription(page, "Öffne die TV-/Tuner-Funktion deines Fernsehers, um Live-Sender anzusehen.");
+        LinearLayout actions = addHorizontalRow(page);
+        View open = createActionTile("TV / Tuner öffnen", R.drawable.logo_live_tv,
+                v -> LiveTvLauncher.open(this));
+        open.setId(R.id.live_tv_open);
+        actions.addView(open);
+        View home = createActionTile("Zur Startseite", R.drawable.app_icon, v -> returnHome());
+        home.setId(R.id.page_back_home);
+        actions.addView(home);
+    }
+
+    private void addBackHome(LinearLayout page) {
+        View home = createActionTile("Zur Startseite", R.drawable.app_icon, v -> returnHome());
+        home.setId(R.id.page_back_home);
+        addHorizontalRow(page).addView(home);
+    }
+
+    private void addDescription(LinearLayout page, String description) {
+        TextView message = text(description, 16, false);
+        message.setTextColor(Color.LTGRAY);
+        message.setPadding(0, dp(12), 0, dp(24));
+        page.addView(message);
     }
 
     private void buildTopBar() {
@@ -132,9 +286,11 @@ public class MainActivity extends Activity {
         int[] ids = {R.id.top_bar_home, R.id.top_bar_apps, R.id.top_bar_movies, R.id.top_bar_series, R.id.top_bar_live_tv};
         for (int i = 0; i < labels.length; i++) {
             String n = labels[i];
-            TextView t = text(n, 17, n.equals("Startseite"));
+            TextView t = text(n, 17, false);
             t.setPadding(dp(16), 0, dp(16), 0);
             prepareTopBarItem(t, ids[i]);
+            final Page targetPage = Page.values()[i];
+            t.setOnClickListener(v -> showPage(targetPage));
             nav.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
 
@@ -174,50 +330,84 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void connectAppAndTopBarFocus() {
-        View firstApp = appsRow.getChildAt(0);
+    private View activeMenu() { return topBarItems.get(currentPage.ordinal()); }
+
+    private void updateActiveMenu() {
+        for (View item : topBarItems) {
+            item.setSelected(item == activeMenu());
+            updateFocusAppearance(item);
+        }
+    }
+
+    private List<List<View>> contentRows() {
+        List<List<View>> rows = new ArrayList<>();
+        if (allAppsGrid != null && allAppsGrid.getChildCount() > 0) {
+            for (int i = 0; i < allAppsGrid.getChildCount(); i += allAppsGrid.getColumnCount()) {
+                List<View> row = new ArrayList<>();
+                for (int j = i; j < Math.min(i + allAppsGrid.getColumnCount(), allAppsGrid.getChildCount()); j++) {
+                    row.add(allAppsGrid.getChildAt(j));
+                }
+                rows.add(row);
+            }
+        }
+        for (ViewGroup group : horizontalRows) {
+            List<View> row = new ArrayList<>();
+            for (int i = 0; i < group.getChildCount(); i++) {
+                if (group.getChildAt(i).isFocusable()) row.add(group.getChildAt(i));
+            }
+            if (!row.isEmpty()) rows.add(row);
+        }
+        return rows;
+    }
+
+    private View firstContent() {
+        List<List<View>> rows = contentRows();
+        return rows.isEmpty() ? activeMenu() : rows.get(0).get(0);
+    }
+
+    private void connectPageFocus() {
+        List<List<View>> rows = contentRows();
+        for (List<View> row : rows) {
+            for (View item : row) {
+                if (item.getId() == View.NO_ID) item.setId(View.generateViewId());
+                item.setFocusableInTouchMode(true);
+            }
+        }
         for (int i = 0; i < topBarItems.size(); i++) {
             View item = topBarItems.get(i);
-            View left = topBarItems.get(Math.max(0, i - 1));
-            View right = topBarItems.get(Math.min(topBarItems.size() - 1, i + 1));
-            item.setNextFocusLeftId(left.getId());
-            item.setNextFocusRightId(right.getId());
-            item.setNextFocusUpId(item.getId());
-            item.setNextFocusDownId(firstApp.getId());
-            item.setOnKeyListener((v, keyCode, event) -> {
-                int direction;
-                View target;
-                switch (keyCode) {
-                    case KeyEvent.KEYCODE_DPAD_LEFT: target = left; direction = View.FOCUS_LEFT; break;
-                    case KeyEvent.KEYCODE_DPAD_RIGHT: target = right; direction = View.FOCUS_RIGHT; break;
-                    case KeyEvent.KEYCODE_DPAD_UP: target = item; direction = View.FOCUS_UP; break;
-                    case KeyEvent.KEYCODE_DPAD_DOWN: target = appsRow.getChildAt(0); direction = View.FOCUS_DOWN; break;
-                    default: return false;
-                }
-                if (event.getAction() == KeyEvent.ACTION_DOWN) focusAndReveal(target, direction);
-                return true;
-            });
+            connectDirections(item, topBarItems.get(Math.max(0, i - 1)),
+                    topBarItems.get(Math.min(topBarItems.size() - 1, i + 1)), item, firstContent());
         }
-        for (int i = 0; i < appsRow.getChildCount(); i++) {
-            View item = appsRow.getChildAt(i);
-            View left = appsRow.getChildAt(Math.max(0, i - 1));
-            View right = appsRow.getChildAt(Math.min(appsRow.getChildCount() - 1, i + 1));
-            item.setNextFocusLeftId(left.getId());
-            item.setNextFocusRightId(right.getId());
-            item.setNextFocusUpId(topBarItems.get(0).getId());
-            item.setOnKeyListener((v, keyCode, event) -> {
-                View target;
-                int direction;
-                switch (keyCode) {
-                    case KeyEvent.KEYCODE_DPAD_UP: target = topBarItems.get(0); direction = View.FOCUS_UP; break;
-                    case KeyEvent.KEYCODE_DPAD_LEFT: target = left; direction = View.FOCUS_LEFT; break;
-                    case KeyEvent.KEYCODE_DPAD_RIGHT: target = right; direction = View.FOCUS_RIGHT; break;
-                    default: return false;
-                }
-                if (event.getAction() == KeyEvent.ACTION_DOWN) focusAndReveal(target, direction);
-                return true;
-            });
+        for (int r = 0; r < rows.size(); r++) {
+            List<View> row = rows.get(r);
+            for (int c = 0; c < row.size(); c++) {
+                View item = row.get(c);
+                View up = r == 0 ? activeMenu() : rows.get(r - 1).get(Math.min(c, rows.get(r - 1).size() - 1));
+                View down = r == rows.size() - 1 ? item : rows.get(r + 1).get(Math.min(c, rows.get(r + 1).size() - 1));
+                connectDirections(item, row.get(Math.max(0, c - 1)),
+                        row.get(Math.min(row.size() - 1, c + 1)), up, down);
+            }
         }
+    }
+
+    private void connectDirections(View item, View left, View right, View up, View down) {
+        item.setNextFocusLeftId(left.getId());
+        item.setNextFocusRightId(right.getId());
+        item.setNextFocusUpId(up.getId());
+        item.setNextFocusDownId(down.getId());
+        item.setOnKeyListener((v, keyCode, event) -> {
+            View target;
+            int direction;
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_DPAD_LEFT: target = left; direction = View.FOCUS_LEFT; break;
+                case KeyEvent.KEYCODE_DPAD_RIGHT: target = right; direction = View.FOCUS_RIGHT; break;
+                case KeyEvent.KEYCODE_DPAD_UP: target = up; direction = View.FOCUS_UP; break;
+                case KeyEvent.KEYCODE_DPAD_DOWN: target = down; direction = View.FOCUS_DOWN; break;
+                default: return false;
+            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN) focusAndReveal(target, direction);
+            return true;
+        });
     }
 
     private void refreshHdmi() {
@@ -282,59 +472,41 @@ public class MainActivity extends Activity {
                 .show();
     }
 
+    private View createAppTile(LaunchableApps.Entry entry) {
+        LinearLayout tile = card();
+        tile.setOrientation(LinearLayout.VERTICAL);
+        tile.setGravity(Gravity.CENTER);
+        tile.setPadding(dp(12), dp(12), dp(12), dp(10));
+        ImageView icon = new ImageView(this);
+        icon.setImageDrawable(entry.loadIcon(getPackageManager()));
+        icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        tile.addView(icon, new LinearLayout.LayoutParams(dp(72), dp(72)));
+        TextView name = text(entry.label, 14, true);
+        name.setGravity(Gravity.CENTER);
+        name.setSingleLine(true);
+        tile.addView(name, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(35)));
+        tile.setContentDescription(entry.label);
+        tile.setTag(entry.component.flattenToString());
+        tile.setOnClickListener(v -> entry.launch(this));
+        applyFocus(tile);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(180), dp(135));
+        lp.setMargins(0, 0, dp(14), 0);
+        tile.setLayoutParams(lp);
+        return tile;
+    }
+
     private void refreshApps() {
         if (appsRow == null) return;
         appsRow.removeAllViews();
-        PackageManager pm = getPackageManager();
-        Intent q = new Intent(Intent.ACTION_MAIN);
-        q.addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        List<ResolveInfo> infos = pm.queryIntentActivities(q, 0);
-        int added = 0;
-        for (ResolveInfo ri : infos) {
-            if (ri.activityInfo == null || getPackageName().equals(ri.activityInfo.packageName)) continue;
-            LinearLayout tile = card();
-            tile.setOrientation(LinearLayout.VERTICAL);
-            tile.setGravity(Gravity.CENTER);
-            tile.setPadding(dp(12), dp(12), dp(12), dp(10));
-
-            ImageView icon = new ImageView(this);
-            try { icon.setImageDrawable(ri.loadIcon(pm)); } catch (Exception ignored) {}
-            icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-            tile.addView(icon, new LinearLayout.LayoutParams(dp(72), dp(72)));
-            TextView name = text(ri.loadLabel(pm).toString(), 14, true);
-            name.setGravity(Gravity.CENTER);
-            name.setSingleLine(true);
-            tile.addView(name, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(35)));
-
-            String pkg = ri.activityInfo.packageName;
-            tile.setOnClickListener(v -> {
-                Intent launch = pm.getLeanbackLaunchIntentForPackage(pkg);
-                if (launch == null) launch = pm.getLaunchIntentForPackage(pkg);
-                if (launch != null) startActivity(launch);
-            });
-            applyFocus(tile);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(180), dp(135));
-            lp.setMargins(0, 0, dp(14), 0);
-            tile.setLayoutParams(lp);
-            appsRow.addView(tile);
-            added++;
-            if (added >= 12) break;
+        for (int i = 0; i < Math.min(12, installedApps.size()); i++) {
+            appsRow.addView(createAppTile(installedApps.get(i)));
         }
-        appsRow.addView(createActionTile("Alle Apps / Store", R.drawable.logo_playstore, v -> LauncherUtils.openPlayStore(this)));
-        // refreshApps replaces the tiles on every onStart, including after
-        // returning from Settings. Never leave focus links pointing at old IDs.
-        for (int i = 0; i < appsRow.getChildCount(); i++) {
-            appsRow.getChildAt(i).setId(View.generateViewId());
-            appsRow.getChildAt(i).setFocusableInTouchMode(true);
-        }
-        connectAppAndTopBarFocus();
-        if (!initialFocusAssigned || getCurrentFocus() == null) {
-            focusAndReveal(appsRow.getChildAt(0), View.FOCUS_DOWN);
-            initialFocusAssigned = true;
-        }
+        View allApps = createActionTile("Alle Apps", R.drawable.logo_playstore, v -> showPage(Page.APPS));
+        allApps.setId(R.id.home_all_apps);
+        appsRow.addView(allApps);
     }
 
-    private LinearLayout addHorizontalRow() {
+    private LinearLayout addHorizontalRow(LinearLayout parent) {
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         configureFocusContainer(hsv);
         hsv.setHorizontalScrollBarEnabled(false);
@@ -344,7 +516,8 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(dp(2), dp(8), dp(2), dp(8));
         hsv.addView(row, new HorizontalScrollView.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addView(hsv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        parent.addView(hsv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        horizontalRows.add(row);
         return row;
     }
 
@@ -377,26 +550,38 @@ public class MainActivity extends Activity {
     }
 
     private void applyFocus(View v) {
-        if (v instanceof TextView) v.setBackground(roundRect(Color.TRANSPARENT, 10));
-        v.setOnFocusChangeListener((view, hasFocus) -> {
-            view.animate().scaleX(hasFocus ? 1.07f : 1f).scaleY(hasFocus ? 1.07f : 1f).setDuration(120).start();
-            boolean tile = view instanceof LinearLayout;
-            GradientDrawable background = roundRect(hasFocus ? TILE_FOCUS : (tile ? TILE : Color.TRANSPARENT), tile ? 18 : 10);
-            if (hasFocus) background.setStroke(dp(2), Color.WHITE);
-            view.setBackground(background);
-            view.setElevation(hasFocus ? dp(10) : 0);
-        });
+        v.setOnFocusChangeListener((view, hasFocus) -> updateFocusAppearance(view));
+        updateFocusAppearance(v);
     }
 
-    private void addSection(String s) {
+    private void updateFocusAppearance(View view) {
+        boolean focused = view.hasFocus();
+        boolean selected = view.isSelected();
+        boolean menu = view instanceof TextView;
+        float scale = !menu && focused ? 1.07f : 1f;
+        view.animate().scaleX(scale).scaleY(scale).setDuration(120).start();
+        int active = Color.rgb(29, 64, 87);
+        GradientDrawable background = roundRect(focused ? TILE_FOCUS :
+                (selected ? active : (menu ? Color.TRANSPARENT : TILE)), menu ? 10 : 18);
+        if (focused || selected) background.setStroke(dp(2), focused ? Color.WHITE : Color.rgb(102, 209, 255));
+        view.setBackground(background);
+        view.setElevation(focused ? dp(10) : 0);
+        if (menu) {
+            TextView label = (TextView) view;
+            label.setTextColor(selected && !focused ? Color.rgb(144, 220, 255) : Color.WHITE);
+            label.setTypeface(android.graphics.Typeface.DEFAULT,
+                    selected ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL);
+        }
+    }
+
+    private void addSection(LinearLayout parent, String s) {
         TextView t = text(s, 22, true);
         t.setPadding(0, 0, 0, dp(8));
-        root.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
+        parent.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
     }
 
-    private void addSpacer(int dp) {
-        View s = new View(this);
-        root.addView(s, new LinearLayout.LayoutParams(1, dp(dp)));
+    private void addSpacer(LinearLayout parent, int sizeDp) {
+        parent.addView(new View(this), new LinearLayout.LayoutParams(1, dp(sizeDp)));
     }
 
     private TextView text(String s, int sp, boolean bold) {

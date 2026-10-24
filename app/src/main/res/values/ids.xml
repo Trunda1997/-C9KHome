@@ -6,4 +6,14 @@
     <item name="top_bar_live_tv" type="id" />
     <item name="top_bar_settings" type="id" />
     <item name="apps_row" type="id" />
+    <item name="page_content" type="id" />
+    <item name="page_home" type="id" />
+    <item name="page_apps" type="id" />
+    <item name="page_movies" type="id" />
+    <item name="page_series" type="id" />
+    <item name="page_live_tv" type="id" />
+    <item name="all_apps_grid" type="id" />
+    <item name="home_all_apps" type="id" />
+    <item name="page_back_home" type="id" />
+    <item name="live_tv_open" type="id" />
 </resources>

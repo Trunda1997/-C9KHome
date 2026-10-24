@@ -2,6 +2,7 @@ package de.tcl.c9khome;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import android.content.ContentValues;
@@ -14,6 +15,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.HorizontalScrollView;
+import android.widget.GridLayout;
 import android.widget.ScrollView;
 
 import androidx.test.core.app.ActivityScenario;
@@ -24,6 +26,8 @@ import androidx.test.uiautomator.UiDevice;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -48,10 +52,12 @@ public final class FocusNavigationTest {
 
     private ActivityScenario<MainActivity> scenario;
     private UiDevice device;
+    private MainActivity originalActivity;
 
     @Before public void launchLauncher() {
         device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
         scenario = ActivityScenario.launch(MainActivity.class);
+        scenario.onActivity(activity -> originalActivity = activity);
         assertFirstAppFocused();
     }
 
@@ -156,6 +162,201 @@ public final class FocusNavigationTest {
         assertFirstAppVisible();
         key(KeyEvent.KEYCODE_DPAD_UP);
         assertFocused(R.id.top_bar_home);
+    }
+
+    @Test public void allInternalTabsOpenWithOkAndKeepTheirSelectionWhileFocusMoves() {
+        int[] pages = {R.id.page_home, R.id.page_apps, R.id.page_movies,
+                R.id.page_series, R.id.page_live_tv};
+        key(KeyEvent.KEYCODE_DPAD_UP);
+        for (int index = 0; index < pages.length; index++) {
+            if (index > 0) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+            assertFocused(TOP_BAR[index]);
+            key(KeyEvent.KEYCODE_DPAD_CENTER);
+            assertPageShown(pages[index]);
+            assertActiveTab(TOP_BAR[index]);
+            assertFocused(TOP_BAR[index]);
+            screenshot("page-" + index);
+
+            if (index < pages.length - 1) {
+                key(KeyEvent.KEYCODE_DPAD_RIGHT);
+                assertFocused(TOP_BAR[index + 1]);
+                assertActiveTab(TOP_BAR[index]);
+                key(KeyEvent.KEYCODE_DPAD_LEFT);
+                assertFocused(TOP_BAR[index]);
+            }
+            key(KeyEvent.KEYCODE_DPAD_DOWN);
+            final int pageIndex = index;
+            awaitActivity("Down must enter the current page", activity -> {
+                View focused = activity.getCurrentFocus();
+                if (pageIndex == 0) return focused == appsRow(activity).getChildAt(0);
+                if (pageIndex == 1) return focused == appsGrid(activity).getChildAt(0);
+                int target = pageIndex == 4 ? R.id.live_tv_open : R.id.page_back_home;
+                return focused == activity.findViewById(target);
+            });
+            assertActiveTab(TOP_BAR[index]);
+            key(KeyEvent.KEYCODE_DPAD_UP);
+            assertFocused(TOP_BAR[index]);
+        }
+        assertSameActivity();
+    }
+
+    @Test public void appsPageContainsEveryTestEntryIncludingMobileAppsAndHasNoTwelveAppLimit() {
+        activateFromHome(1);
+        assertPageShown(R.id.page_apps);
+        scenario.onActivity(activity -> {
+            GridLayout grid = appsGrid(activity);
+            assertTrue("Apps page must not use the twelve-app home limit", grid.getChildCount() > 12);
+            Set<String> components = new HashSet<>();
+            Set<String> labels = new HashSet<>();
+            for (int index = 0; index < grid.getChildCount(); index++) {
+                View tile = grid.getChildAt(index);
+                assertTrue("Every app entry must be focusable", tile.isFocusable());
+                assertNotNull("Every tile must identify its launch component", tile.getTag());
+                assertTrue("The same component must appear only once", components.add(tile.getTag().toString()));
+                assertNotNull("Every tile must have an app label", tile.getContentDescription());
+                labels.add(tile.getContentDescription().toString());
+            }
+            for (int index = 1; index <= 12; index++) {
+                assertTrue("Missing installed TV app fixture " + index,
+                        labels.contains(String.format(java.util.Locale.ROOT, "Focus fixture %02d", index)));
+            }
+            assertTrue("Apps with a regular LAUNCHER entry must also be included", labels.contains("Mobile fixture"));
+            assertTrue("Use a complete app grid", grid.getColumnCount() >= 4);
+        });
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        assertGridItemFocused(0);
+        AtomicInteger columns = new AtomicInteger();
+        scenario.onActivity(activity -> columns.set(appsGrid(activity).getColumnCount()));
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        assertGridItemFocused(columns.get());
+        key(KeyEvent.KEYCODE_DPAD_UP);
+        assertGridItemFocused(0);
+        key(KeyEvent.KEYCODE_DPAD_UP);
+        assertFocused(R.id.top_bar_apps);
+        assertSameActivity();
+    }
+
+    @Test public void aMobileAppCanBeStartedWithOkAndBackReturnsToAppsPage() {
+        activateFromHome(1);
+        AtomicInteger mobileIndex = new AtomicInteger(-1);
+        AtomicInteger columns = new AtomicInteger();
+        scenario.onActivity(activity -> {
+            GridLayout grid = appsGrid(activity);
+            columns.set(grid.getColumnCount());
+            for (int index = 0; index < grid.getChildCount(); index++) {
+                if ("Mobile fixture".contentEquals(grid.getChildAt(index).getContentDescription())) {
+                    mobileIndex.set(index);
+                    break;
+                }
+            }
+        });
+        assertTrue("Mobile-only fixture must be available", mobileIndex.get() >= 0);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        for (int row = 0; row < mobileIndex.get() / columns.get(); row++) key(KeyEvent.KEYCODE_DPAD_DOWN);
+        for (int column = 0; column < mobileIndex.get() % columns.get(); column++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertGridItemFocused(mobileIndex.get());
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        awaitPackage(false);
+        assertTrue("OK must start the selected fixture activity", InstrumentationRegistry.getInstrumentation()
+                .getContext().getPackageName().equals(device.getCurrentPackageName()));
+        key(KeyEvent.KEYCODE_BACK);
+        awaitPackage(true);
+        assertPageShown(R.id.page_apps);
+        assertActiveTab(R.id.top_bar_apps);
+        assertSameActivity();
+    }
+
+    @Test public void backFromEveryInternalPageReturnsHomeWithoutClosingTheLauncher() {
+        for (int index = 1; index <= 4; index++) {
+            activateFromHome(index);
+            key(KeyEvent.KEYCODE_DPAD_DOWN);
+            key(KeyEvent.KEYCODE_BACK);
+            assertPageShown(R.id.page_home);
+            assertActiveTab(R.id.top_bar_home);
+            assertFocused(R.id.top_bar_home);
+            assertSameActivity();
+        }
+        key(KeyEvent.KEYCODE_BACK);
+        assertPageShown(R.id.page_home);
+        assertFocused(R.id.top_bar_home);
+        assertTrue("Back on Home must keep C9KHome open", APP_PACKAGE.equals(device.getCurrentPackageName()));
+    }
+
+    @Test public void homeAllAppsShortcutOpensTheInternalFullAppPage() {
+        AtomicInteger lastIndex = new AtomicInteger();
+        scenario.onActivity(activity -> lastIndex.set(appsRow(activity).getChildCount() - 1));
+        for (int index = 0; index < lastIndex.get(); index++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertFocused(R.id.home_all_apps);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        assertPageShown(R.id.page_apps);
+        assertActiveTab(R.id.top_bar_apps);
+        assertTrue("The shortcut must stay inside C9KHome", APP_PACKAGE.equals(device.getCurrentPackageName()));
+        assertSameActivity();
+    }
+
+    @Test public void settingsAndBackPreserveTheActiveInternalPage() {
+        activateFromHome(2);
+        assertPageShown(R.id.page_movies);
+        for (int index = 0; index < 3; index++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertFocused(R.id.top_bar_settings);
+        assertActiveTab(R.id.top_bar_movies);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        awaitPackage(false);
+        key(KeyEvent.KEYCODE_BACK);
+        awaitPackage(true);
+        assertPageShown(R.id.page_movies);
+        assertActiveTab(R.id.top_bar_movies);
+        assertFocused(R.id.top_bar_settings);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        assertFocused(R.id.page_back_home);
+        key(KeyEvent.KEYCODE_DPAD_UP);
+        assertFocused(R.id.top_bar_movies);
+        key(KeyEvent.KEYCODE_BACK);
+        assertPageShown(R.id.page_home);
+        assertSameActivity();
+    }
+
+    private void activateFromHome(int topIndex) {
+        key(KeyEvent.KEYCODE_BACK);
+        assertPageShown(R.id.page_home);
+        assertFocused(R.id.top_bar_home);
+        for (int index = 0; index < topIndex; index++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertFocused(TOP_BAR[topIndex]);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        assertActiveTab(TOP_BAR[topIndex]);
+    }
+
+    private void assertPageShown(int pageId) {
+        awaitActivity("Expected internal page " + pageId, activity -> {
+            View page = activity.findViewById(pageId);
+            return page != null && page.isShown();
+        });
+        assertSameActivity();
+    }
+
+    private void assertActiveTab(int activeId) {
+        scenario.onActivity(activity -> {
+            for (int index = 0; index < TOP_BAR.length; index++) {
+                View tab = activity.findViewById(TOP_BAR[index]);
+                assertTrue("Only the current page must keep its menu selection", tab.isSelected() == (TOP_BAR[index] == activeId));
+            }
+        });
+    }
+
+    private void assertSameActivity() {
+        scenario.onActivity(activity -> assertSame("Changing pages must not restart C9KHome", originalActivity, activity));
+    }
+
+    private GridLayout appsGrid(MainActivity activity) {
+        GridLayout grid = activity.findViewById(R.id.all_apps_grid);
+        assertNotNull("Complete app grid must exist", grid);
+        return grid;
+    }
+
+    private void assertGridItemFocused(int index) {
+        awaitActivity("Expected focus on app grid entry " + index, activity ->
+                activity.getCurrentFocus() == appsGrid(activity).getChildAt(index));
+        assertNoScrollContainerFocused();
     }
 
     private void key(int keyCode) {
