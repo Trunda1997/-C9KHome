@@ -603,7 +603,7 @@ public final class FocusNavigationTest {
 
     private int countDedicatedSettings(View view) {
         if (view == null) return 0;
-        int count = view.isFocusable() && "Einstellungen".contentEquals(view.getContentDescription()) ? 1 : 0;
+        int count = view.isFocusable() && "Einstellungen".equals(String.valueOf(view.getContentDescription())) ? 1 : 0;
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) count += countDedicatedSettings(group.getChildAt(i));

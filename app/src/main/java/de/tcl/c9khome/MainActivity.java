@@ -54,6 +54,7 @@ public class MainActivity extends Activity implements ScreenHost {
     private ScreenView page;
     private Route route = new Route(ScreenId.HOME, ScreenId.HOME);
     private boolean started, receiverRegistered, firstData = true;
+    private boolean pendingDataUi;
     private int dataGeneration;
     private TextView clock;
 
@@ -125,6 +126,13 @@ public class MainActivity extends Activity implements ScreenHost {
         super.onStop();
     }
 
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        // A native app/keyboard may return before background provider discovery
+        // completes. The already visible rows must still have valid D-Pad links.
+        if (focused) main.post(this::rebindFocus);
+    }
+
     @Override protected void onDestroy() {
         dataWorker.shutdownNow();
         tvUi.close();
@@ -171,7 +179,14 @@ public class MainActivity extends Activity implements ScreenHost {
                     for (EntertainmentAppRepository.Provider p : nextProviders) if (p.packageName.equals(route.provider)) present = true;
                     if (!present) route.provider = null;
                 }
-                if (favoriteController.isMoving()) return; // Never interrupt an in-progress reorder.
+                if (favoriteController.isMoving()) { pendingDataUi = true; return; }
+                if (route.screen == ScreenId.DETAIL && route.item != null) {
+                    boolean present = false;
+                    for (EntertainmentAppRepository.Provider p : nextProviders) {
+                        if (p.packageName.equals(route.item.providerPackage)) present = true;
+                    }
+                    if (!present) route = history.isEmpty() ? new Route(ScreenId.HOME, ScreenId.HOME) : history.pop();
+                }
                 captureRoute();
                 render(true);
                 if (firstData) { reveal(firstContent(), View.FOCUS_DOWN); firstData = false; }
@@ -279,9 +294,6 @@ public class MainActivity extends Activity implements ScreenHost {
             EditText field = findViewById(Integer.parseInt(key));
             if (field != null) {
                 field.setText(route.inputs.getString(key, ""));
-                if (route.screen == ScreenId.SEARCH && field.length() > 0) {
-                    field.onEditorAction(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
-                }
             }
         }
         rebindFocus();
@@ -304,7 +316,7 @@ public class MainActivity extends Activity implements ScreenHost {
 
     @Override public void onBackPressed() { back(); }
     private void back() {
-        if (favoriteController.handleBack()) return;
+        if (favoriteController.handleBack()) { applyPendingData(); return; }
         if (!history.isEmpty()) { captureRoute(); route = history.pop(); render(true); }
         else if (route.screen != ScreenId.HOME) navigate(ScreenId.HOME);
         else reveal(menu.get(ScreenId.HOME), View.FOCUS_UP);
@@ -340,7 +352,17 @@ public class MainActivity extends Activity implements ScreenHost {
     @Override public void addHdmi(ScreenView view) { hdmiSection.addTo(view); }
     @Override public void rebindFocus() { if (page != null) navigator.bind(topItems, activeMenu(), page); }
     @Override public void reveal(View view, int direction) { FocusNavigator.reveal(view, direction); }
-    @Override public boolean handleSpecialKey(View view, int code, KeyEvent event) { return favoriteController.handleKey(view, code, event); }
+    @Override public boolean handleSpecialKey(View view, int code, KeyEvent event) {
+        boolean moving = favoriteController.isMoving();
+        boolean consumed = favoriteController.handleKey(view, code, event);
+        if (moving && !favoriteController.isMoving()) applyPendingData();
+        return consumed;
+    }
+    private void applyPendingData() {
+        if (!pendingDataUi) return;
+        pendingDataUi = false;
+        main.post(() -> { if (started) refreshScreen(); });
+    }
     @Override public void refreshScreen() { captureRoute(); render(true); }
     @Override public String providerFilter() { return route.provider; }
     @Override public void setProviderFilter(String packageName) { route.provider = packageName; }
