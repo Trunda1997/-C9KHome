@@ -37,6 +37,10 @@ public final class FocusNavigator {
         item.setNextFocusUpId(up.getId()); item.setNextFocusDownId(down.getId());
         item.setOnKeyListener((v, code, event) -> {
             if (host.handleSpecialKey(v, code, event)) return true;
+            if (item instanceof EditText && (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER)) {
+                if (event.getAction() == KeyEvent.ACTION_UP) item.performClick();
+                return true;
+            }
             View target; int direction;
             switch (code) {
                 case KeyEvent.KEYCODE_DPAD_LEFT:

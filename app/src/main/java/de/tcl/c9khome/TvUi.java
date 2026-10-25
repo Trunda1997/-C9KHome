@@ -70,6 +70,7 @@ public final class TvUi implements AutoCloseable {
 
     private void applyFocus(View view) {
         boolean focused = view.hasFocus();
+        if (view instanceof EditText && !focused) ((EditText) view).setShowSoftInputOnFocus(false);
         boolean selected = view.isSelected();
         boolean moving = view.isActivated();
         boolean card = view instanceof LinearLayout;
@@ -246,6 +247,7 @@ public final class TvUi implements AutoCloseable {
         input.setContentDescription(hint);
         input.setOnClickListener(view -> {
             InputMethodManager keyboard = (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
+            input.setShowSoftInputOnFocus(true);
             input.requestFocus();
             if (keyboard != null) keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
         });

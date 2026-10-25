@@ -526,6 +526,27 @@ public final class FocusNavigationTest {
         assertSameActivity();
     }
 
+    @Test public void okOpensTheTvKeyboardAndBackReturnsToMediaSearch() {
+        activateTab(R.id.top_bar_search);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        assertFocused(R.id.media_search_input);
+        String configured = android.provider.Settings.Secure.getString(targetContext().getContentResolver(),
+                android.provider.Settings.Secure.DEFAULT_INPUT_METHOD);
+        assertNotNull("The TV emulator must provide a keyboard", configured);
+        String keyboardPackage = configured.split("/")[0];
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        long deadline = SystemClock.uptimeMillis() + TIMEOUT_MS;
+        while (!device.hasObject(By.pkg(keyboardPackage)) && SystemClock.uptimeMillis() < deadline) {
+            SystemClock.sleep(100);
+        }
+        assertTrue("OK must open the native TV keyboard without touch", device.hasObject(By.pkg(keyboardPackage)));
+        key(KeyEvent.KEYCODE_BACK);
+        assertPageShown(R.id.page_search);
+        assertFocused(R.id.media_search_input);
+        key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertFocused(R.id.media_search_submit);
+    }
+
     @Test public void entertainmentDiscoveryUsesInstalledAppCategoryBeyondKnownMappings() {
         List<EntertainmentAppRepository.Provider> providers = new EntertainmentAppRepository(targetContext())
                 .detect(LaunchableApps.load(targetContext()));
