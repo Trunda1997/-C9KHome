@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Installed only with the test APK; production app discovery is unchanged. -->
-    <application android:theme="@android:style/Theme.Material.NoActionBar">
+    <application android:appCategory="video" android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
             android:name="de.tcl.c9khome.focus.FixtureActivity"
             android:exported="true" />

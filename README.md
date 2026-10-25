@@ -50,3 +50,20 @@ Die genannten Marken und Produktnamen gehören den jeweiligen Rechteinhabern. Di
 
 ## APK ohne lokale Entwicklungsumgebung bauen
 Eine GitHub-Actions-Datei ist bereits unter `.github/workflows/build-apk.yml` enthalten. Nach dem Hochladen in ein GitHub-Repository kann der Workflow **Build C9K Home APK** manuell gestartet werden; das Debug-APK wird anschließend als Build-Artefakt bereitgestellt.
+
+
+## TCL Home Test V0.5
+
+Die Oberfläche ist in eigenständige Java-Screens und Repositories aufgeteilt. Die obere Leiste führt durch Suche, Startseite, Live TV, Filme, Serien und Apps; das Zahnrad öffnet die originalen Systemeinstellungen.
+
+Die Startseite behält die geordneten V0.4-Favoriten in `home_favorites/packages`. Langes OK öffnet Hinzufügen/Entfernen bzw. Verschieben; im Sortiermodus speichert OK und Zurück verwirft die Änderung. Die HDMI-Erkennung, Marken-Zuordnung und Umschaltung verwenden weiterhin dieselben Hilfsklassen.
+
+Medien- und Personensuche verwendet ausschließlich gelieferte Mediendatensätze. App-Suche und echte Google-Play-Verknüpfungen liegen getrennt im Apps-Bereich. Die App-Verzeichnisse sind benannte Store-Verknüpfungen, keine personalisierten Empfehlungen.
+
+`EntertainmentAppRepository` erkennt installierte Anbieter über Paket-Mappings, Android-Kategorien, Metadaten, TV-Intents und zugängliche TV-Providerdaten. Paketänderungen aktualisieren die Ansicht und entfernen Anbieter-Caches. `MediaRepository.MediaSource` und `LiveTvRepository.LiveSource` sind die Anschlussstellen für spätere echte APIs und Konten. Ohne Berechtigung oder Datenquelle werden Leerzustände angezeigt. Netflix-/Disney+-/Prime-/YouTube-Konten sind derzeit nicht angebunden.
+
+Provider-Abfragen und Bilder laufen im Hintergrund. Der Mediencache ist auf 120 Datensätze, Live-Daten auf 100 Einträge und der Bildcache auf 6 MiB begrenzt. Fehlende Daten erzeugen keine erfundenen Titel, Episoden oder Ranglisten.
+
+Die Workflow-Dateien bauen `TCL Home Test V0.5.apk` und führen Android-TV-Tests mit D-Pad/OK/Zurück aus. Ein physischer TCL-C9K-/PS5-Test ist zusätzlich erforderlich.
+
+Hinweis zur Signierung: Die bisherige Actions-Pipeline verwendet den Standard-Debug-Keystore des jeweiligen Runners. `applicationId` bleibt `de.tcl.c9khome`; eine identische Update-Signatur ist aber nur mit dem ursprünglichen Keystore gesichert. Dieser wird nicht im Repository gespeichert.

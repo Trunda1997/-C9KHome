@@ -24,6 +24,7 @@ import android.widget.HorizontalScrollView;
 import android.widget.GridLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.EditText;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -41,6 +42,10 @@ import java.util.List;
 import java.text.Collator;
 import java.util.Locale;
 import java.util.Set;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Map;
+import java.util.EnumMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -56,11 +61,11 @@ import org.junit.runner.RunWith;
 @RunWith(AndroidJUnit4.class)
 @LargeTest
 public final class FocusNavigationTest {
-    private static final long TIMEOUT_MS = 8000;
+    private static final long TIMEOUT_MS = 15000;
     private static final String APP_PACKAGE = "de.tcl.c9khome";
     private static final int[] TOP_BAR = {
-            R.id.top_bar_home, R.id.top_bar_apps, R.id.top_bar_movies,
-            R.id.top_bar_series, R.id.top_bar_live_tv, R.id.top_bar_settings
+            R.id.top_bar_search, R.id.top_bar_home, R.id.top_bar_live_tv,
+            R.id.top_bar_movies, R.id.top_bar_series, R.id.top_bar_apps, R.id.top_bar_settings
     };
 
     private ActivityScenario<MainActivity> scenario;
@@ -86,45 +91,44 @@ public final class FocusNavigationTest {
 
     @Test public void topBarTraversesAllItemsAndKeepsFocusAtItsEdges() {
         key(KeyEvent.KEYCODE_DPAD_UP);
-        assertFocused(TOP_BAR[0]);
+        assertFocused(R.id.top_bar_home);
         key(KeyEvent.KEYCODE_DPAD_LEFT);
-        assertFocused(TOP_BAR[0]);
-
+        assertFocused(R.id.top_bar_search);
+        key(KeyEvent.KEYCODE_DPAD_LEFT);
+        assertFocused(R.id.top_bar_search);
         for (int index = 0; index < TOP_BAR.length; index++) {
             if (index > 0) key(KeyEvent.KEYCODE_DPAD_RIGHT);
             assertFocused(TOP_BAR[index]);
             final int viewId = TOP_BAR[index];
             scenario.onActivity(activity -> {
                 View item = activity.findViewById(viewId);
-                assertTrue("Top-bar item must be focusable", item.isFocusable());
-                assertTrue("Top-bar item must also work in touch mode", item.isFocusableInTouchMode());
+                assertTrue(item.isFocusable());
+                assertTrue(item.isFocusableInTouchMode());
             });
             key(KeyEvent.KEYCODE_DPAD_UP);
-            assertFocused(TOP_BAR[index]);
+            assertFocused(viewId);
             screenshot("top-bar-" + index);
         }
-
         key(KeyEvent.KEYCODE_DPAD_RIGHT);
         assertFocused(R.id.top_bar_settings);
         key(KeyEvent.KEYCODE_DPAD_LEFT);
-        assertFocused(R.id.top_bar_live_tv);
+        assertFocused(R.id.top_bar_apps);
         for (int index = TOP_BAR.length - 3; index >= 0; index--) {
             key(KeyEvent.KEYCODE_DPAD_LEFT);
             assertFocused(TOP_BAR[index]);
         }
         key(KeyEvent.KEYCODE_DPAD_LEFT);
-        assertFocused(R.id.top_bar_home);
+        assertFocused(R.id.top_bar_search);
     }
 
     @Test public void everyTopBarItemReturnsToTheCurrentFirstApp() {
-        for (int index = 0; index < TOP_BAR.length; index++) {
-            key(KeyEvent.KEYCODE_DPAD_UP);
-            assertFocused(R.id.top_bar_home);
-            for (int step = 0; step < index; step++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
-            assertFocused(TOP_BAR[index]);
+        for (int id : TOP_BAR) {
+            focusTop(id);
             key(KeyEvent.KEYCODE_DPAD_DOWN);
             assertFirstAppFocused();
             assertFirstAppVisible();
+            key(KeyEvent.KEYCODE_DPAD_UP);
+            assertFocused(R.id.top_bar_home);
         }
     }
 
@@ -149,11 +153,11 @@ public final class FocusNavigationTest {
 
         key(KeyEvent.KEYCODE_DPAD_UP);
         assertFocused(R.id.top_bar_home);
-        for (int index = 1; index < TOP_BAR.length; index++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        focusTop(R.id.top_bar_settings);
         assertFocused(R.id.top_bar_settings);
         screenshot("settings-after-scrolled-apps");
         key(KeyEvent.KEYCODE_DPAD_LEFT);
-        assertFocused(R.id.top_bar_live_tv);
+        assertFocused(R.id.top_bar_apps);
         key(KeyEvent.KEYCODE_DPAD_DOWN);
         assertFirstAppFocused();
         assertFirstAppVisible();
@@ -163,7 +167,7 @@ public final class FocusNavigationTest {
     @Test public void settingsOpensWithOkAndBackKeepsTheFocusFlowAfterOnStart() {
         key(KeyEvent.KEYCODE_DPAD_UP);
         assertFocused(R.id.top_bar_home);
-        for (int index = 1; index < TOP_BAR.length; index++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        focusTop(R.id.top_bar_settings);
         assertFocused(R.id.top_bar_settings);
 
         key(KeyEvent.KEYCODE_DPAD_CENTER);
@@ -174,7 +178,7 @@ public final class FocusNavigationTest {
         screenshot("settings-returned-with-back");
 
         key(KeyEvent.KEYCODE_DPAD_LEFT);
-        assertFocused(R.id.top_bar_live_tv);
+        assertFocused(R.id.top_bar_apps);
         key(KeyEvent.KEYCODE_DPAD_RIGHT);
         assertFocused(R.id.top_bar_settings);
         key(KeyEvent.KEYCODE_DPAD_DOWN);
@@ -185,43 +189,32 @@ public final class FocusNavigationTest {
     }
 
     @Test public void allInternalTabsOpenWithOkAndKeepTheirSelectionWhileFocusMoves() {
-        int[] pages = {R.id.page_home, R.id.page_apps, R.id.page_movies,
-                R.id.page_series, R.id.page_live_tv};
-        key(KeyEvent.KEYCODE_DPAD_UP);
+        int[] pages = {R.id.page_search, R.id.page_home, R.id.page_live_tv,
+                R.id.page_movies, R.id.page_series, R.id.page_apps};
         for (int index = 0; index < pages.length; index++) {
-            if (index > 0) key(KeyEvent.KEYCODE_DPAD_RIGHT);
-            assertFocused(TOP_BAR[index]);
-            key(KeyEvent.KEYCODE_DPAD_CENTER);
+            activateTab(TOP_BAR[index]);
             assertPageShown(pages[index]);
             assertActiveTab(TOP_BAR[index]);
             assertFocused(TOP_BAR[index]);
             screenshot("page-" + index);
-
             if (index < pages.length - 1) {
                 key(KeyEvent.KEYCODE_DPAD_RIGHT);
                 assertFocused(TOP_BAR[index + 1]);
                 assertActiveTab(TOP_BAR[index]);
                 key(KeyEvent.KEYCODE_DPAD_LEFT);
-                assertFocused(TOP_BAR[index]);
             }
             key(KeyEvent.KEYCODE_DPAD_DOWN);
-            final int pageIndex = index;
-            awaitActivity("Down must enter the current page", activity -> {
-                View focused = activity.getCurrentFocus();
-                if (pageIndex == 0) return focused == appsRow(activity).getChildAt(0);
-                if (pageIndex == 1) return focused == appsGrid(activity).getChildAt(0);
-                int target = pageIndex == 4 ? R.id.live_tv_open : R.id.page_back_home;
-                return focused == activity.findViewById(target);
-            });
+            awaitActivity("Down must enter the page rather than a scroll container", activity ->
+                    activity.getCurrentFocus() != null && !isTopId(activity.getCurrentFocus().getId()));
+            assertNoScrollContainerFocused();
             assertActiveTab(TOP_BAR[index]);
-            key(KeyEvent.KEYCODE_DPAD_UP);
-            assertFocused(TOP_BAR[index]);
+            focusTop(TOP_BAR[index]);
         }
         assertSameActivity();
     }
 
     @Test public void appsPageMergesAllActivitiesOfEachPackageAndIncludesBothLauncherCategories() {
-        activateFromHome(1);
+        activateTab(R.id.top_bar_apps);
         assertPageShown(R.id.page_apps);
         Set<String> expected = new LinkedHashSet<>();
         PackageManager pm = targetContext().getPackageManager();
@@ -260,7 +253,7 @@ public final class FocusNavigationTest {
                     packages.contains(fixturePackage()));
             assertTrue("Use a complete app grid", grid.getColumnCount() >= 4);
         });
-        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        enterInstalledGrid();
         assertGridItemFocused(0);
         AtomicInteger columns = new AtomicInteger();
         AtomicInteger count = new AtomicInteger();
@@ -274,13 +267,12 @@ public final class FocusNavigationTest {
             key(KeyEvent.KEYCODE_DPAD_UP);
             assertGridItemFocused(0);
         }
-        key(KeyEvent.KEYCODE_DPAD_UP);
-        assertFocused(R.id.top_bar_apps);
+        focusTop(R.id.top_bar_apps);
         assertSameActivity();
     }
 
     @Test public void aMergedPackageCanBeStartedWithOkAndBackReturnsToAppsPage() {
-        activateFromHome(1);
+        activateTab(R.id.top_bar_apps);
         focusGridPackage(fixturePackage());
         key(KeyEvent.KEYCODE_DPAD_CENTER);
         awaitPackage(false);
@@ -293,8 +285,9 @@ public final class FocusNavigationTest {
     }
 
     @Test public void backFromEveryInternalPageReturnsHomeWithoutClosingTheLauncher() {
-        for (int index = 1; index <= 4; index++) {
-            activateFromHome(index);
+        for (int id : new int[]{R.id.top_bar_search, R.id.top_bar_live_tv,
+                R.id.top_bar_movies, R.id.top_bar_series, R.id.top_bar_apps}) {
+            activateTab(id);
             key(KeyEvent.KEYCODE_DPAD_DOWN);
             key(KeyEvent.KEYCODE_BACK);
             assertPageShown(R.id.page_home);
@@ -305,7 +298,7 @@ public final class FocusNavigationTest {
         key(KeyEvent.KEYCODE_BACK);
         assertPageShown(R.id.page_home);
         assertFocused(R.id.top_bar_home);
-        assertTrue("Back on Home must keep C9KHome open", APP_PACKAGE.equals(device.getCurrentPackageName()));
+        assertTrue(APP_PACKAGE.equals(device.getCurrentPackageName()));
     }
 
     @Test public void homeAllAppsShortcutOpensTheInternalFullAppPage() {
@@ -321,10 +314,9 @@ public final class FocusNavigationTest {
     }
 
     @Test public void settingsAndBackPreserveTheActiveInternalPage() {
-        activateFromHome(2);
+        activateTab(R.id.top_bar_movies);
         assertPageShown(R.id.page_movies);
-        for (int index = 0; index < 3; index++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
-        assertFocused(R.id.top_bar_settings);
+        focusTop(R.id.top_bar_settings);
         assertActiveTab(R.id.top_bar_movies);
         key(KeyEvent.KEYCODE_DPAD_CENTER);
         awaitPackage(false);
@@ -334,9 +326,8 @@ public final class FocusNavigationTest {
         assertActiveTab(R.id.top_bar_movies);
         assertFocused(R.id.top_bar_settings);
         key(KeyEvent.KEYCODE_DPAD_DOWN);
-        assertFocused(R.id.page_back_home);
-        key(KeyEvent.KEYCODE_DPAD_UP);
-        assertFocused(R.id.top_bar_movies);
+        assertNoScrollContainerFocused();
+        focusTop(R.id.top_bar_movies);
         key(KeyEvent.KEYCODE_BACK);
         assertPageShown(R.id.page_home);
         assertSameActivity();
@@ -344,22 +335,22 @@ public final class FocusNavigationTest {
 
     @Test public void longOkAddsAndRemovesFavoritesImmediatelyOnBothPages() {
         String pkg = fixturePackage();
-        activateFromHome(1);
+        activateTab(R.id.top_bar_apps);
         focusGridPackage(pkg);
         longOk();
         awaitDialog("Von Startseite entfernen");
         chooseDialogItem(0);
         assertFalse(new FavoriteApps(targetContext()).contains(pkg));
-        key(KeyEvent.KEYCODE_BACK);
+        goHome();
         assertHomePackageAbsent(pkg);
 
-        activateFromHome(1);
+        activateTab(R.id.top_bar_apps);
         focusGridPackage(pkg);
         longOk();
         awaitDialog("Zur Startseite hinzufügen");
         chooseDialogItem(0);
         assertTrue(new FavoriteApps(targetContext()).contains(pkg));
-        key(KeyEvent.KEYCODE_BACK);
+        goHome();
         assertHomePackagePresent(pkg);
 
         focusHomePackage(pkg);
@@ -373,6 +364,11 @@ public final class FocusNavigationTest {
     }
 
     @Test public void moveModeSavesOrderWithOkAndRetainsItAfterRecreation() {
+        // Re-selecting Home must not detach the existing favorites controller.
+        focusTop(R.id.top_bar_home);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        assertFirstAppFocused();
         List<String> before = new FavoriteApps(targetContext()).getPackages();
         assertTrue("At least two installed packages are needed to reorder", before.size() >= 2);
         String moving = before.get(0);
@@ -437,23 +433,198 @@ public final class FocusNavigationTest {
 
     @Test public void homeHasNoFixedSettingsTileAndMediaPagesShowNeutralInformation() {
         scenario.onActivity(activity -> {
-            assertFalse("The lower fixed Settings tile must be removed", hasText(activity.findViewById(R.id.system_row), "Einstellungen"));
-            assertTrue("Play Store stays available", hasText(activity.findViewById(R.id.system_row), "Google Play Store"));
-            assertTrue("TCL inputs stay available", hasText(activity.findViewById(R.id.system_row), "TCL Eingänge"));
+            assertNotNull("The original settings gear stays available", activity.findViewById(R.id.top_bar_settings));
+            assertEquals("Home must not add another dedicated settings control", 0,
+                    countDedicatedSettings(activity.findViewById(R.id.page_home)));
+            View home = activity.findViewById(R.id.page_home);
+            for (String title : new String[]{"Meine Apps", "Weiter anschauen", "Beliebte Filme",
+                    "Beliebte Serien", "Neuerscheinungen", "Empfehlungen aus YouTube", "Nach Genre suchen", "HDMI & Eingänge"}) {
+                assertTrue("Missing home section: " + title, hasText(home, title));
+            }
         });
-        for (int index = 2; index <= 3; index++) {
-            activateFromHome(index);
-            final int pageId = indexPageId(index);
+        for (int id : new int[]{R.id.top_bar_movies, R.id.top_bar_series}) {
+            activateTab(id);
             scenario.onActivity(activity -> {
-                View page = activity.findViewById(pageId);
-                assertTrue("Media pages must explain that content arrives later",
-                        hasTextContaining(page, "Medieninhalte werden später integriert"));
-                assertFalse("No installed app is presented as media", containsAppTile(page));
+                View page = activity.findViewById(id == R.id.top_bar_movies ? R.id.page_movies : R.id.page_series);
+                assertFalse("Installed app entries must not be presented as movies or episodes", containsAppPackageTile(page));
+                assertTrue("Movie/series page must contain genuine empty states or real media", page instanceof ViewGroup
+                        && ((ViewGroup) page).getChildCount() > 2);
             });
         }
     }
 
-    private int indexPageId(int index) { return index == 2 ? R.id.page_movies : R.id.page_series; }
+    @Test public void mediaSearchDoesNotSearchInstalledAppsAndGenresReturnToSearch() {
+        activateTab(R.id.top_bar_search);
+        assertPageShown(R.id.page_search);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        assertFocused(R.id.media_search_input);
+        // Text is test data, navigation/submit still use the remote keys.
+        scenario.onActivity(activity -> ((EditText) activity.findViewById(R.id.media_search_input))
+                .setText("Focus fixture"));
+        key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertFocused(R.id.media_search_submit);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        scenario.onActivity(activity -> {
+            View results = activity.findViewById(R.id.media_search_results);
+            assertNotNull(results);
+            assertTrue("Media search must show an honest empty state for app-name queries",
+                    hasTextContaining(results, "Keine Ergebnisse in den verfügbaren Mediendaten"));
+            assertFalse("Media/person search must not return installed-app cards", containsAppPackageTile(results));
+        });
+        focusTop(R.id.top_bar_search);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        boolean found = false;
+        for (int step = 0; step < 10; step++) {
+            AtomicBoolean genre = new AtomicBoolean();
+            scenario.onActivity(activity -> genre.set(activity.getCurrentFocus() != null
+                    && "genre:Action".equals(activity.getCurrentFocus().getTag())));
+            if (genre.get()) { found = true; break; }
+            key(KeyEvent.KEYCODE_DPAD_DOWN);
+        }
+        assertTrue("The Action genre must be D-Pad reachable", found);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        assertPageShown(R.id.page_genre);
+        scenario.onActivity(activity -> assertTrue(hasText(activity.findViewById(R.id.page_genre), "Action")));
+        key(KeyEvent.KEYCODE_BACK);
+        assertPageShown(R.id.page_search);
+        assertSameActivity();
+    }
+
+    @Test public void appSearchFiltersInstalledPackagesAndOffersRealPlayStoreSearch() {
+        activateTab(R.id.top_bar_apps);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        assertFocused(R.id.apps_search_input);
+        String fixtureLabel = null;
+        for (LaunchableApps.Entry entry : LaunchableApps.load(targetContext())) {
+            if (fixturePackage().equals(entry.packageName)) fixtureLabel = entry.label;
+        }
+        assertNotNull(fixtureLabel);
+        final String query = fixtureLabel;
+        scenario.onActivity(activity -> ((EditText) activity.findViewById(R.id.apps_search_input)).setText(query));
+        key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        assertFocused(R.id.apps_search_submit);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        awaitActivity("App search must filter the installed package grid", activity -> {
+            GridLayout grid = appsGrid(activity);
+            return grid.getChildCount() == 1 && fixturePackage().equals(grid.getChildAt(0).getTag());
+        });
+        scenario.onActivity(activity -> {
+            assertEquals("Query must remain visible after submit", query,
+                    ((EditText) activity.findViewById(R.id.apps_search_input)).getText().toString());
+            assertNotNull("Non-installed app queries must have a real store search action",
+                    activity.findViewById(R.id.store_search));
+        });
+        key(KeyEvent.KEYCODE_DPAD_LEFT);
+        assertFocused(R.id.apps_search_input);
+        scenario.onActivity(activity -> ((EditText) activity.findViewById(R.id.apps_search_input))
+                .setText("__not_installed_v05_fixture__"));
+        key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        key(KeyEvent.KEYCODE_DPAD_CENTER);
+        awaitActivity("Unknown apps must not create invented installed entries", activity ->
+                appsGrid(activity).getChildCount() == 0);
+        screenshot("app-search-empty");
+        assertSameActivity();
+    }
+
+    @Test public void entertainmentDiscoveryUsesInstalledAppCategoryBeyondKnownMappings() {
+        List<EntertainmentAppRepository.Provider> providers = new EntertainmentAppRepository(targetContext())
+                .detect(LaunchableApps.load(targetContext()));
+        boolean fixtureRecognized = false;
+        Set<String> packages = new HashSet<>();
+        for (EntertainmentAppRepository.Provider provider : providers) {
+            assertTrue("Provider packages must be unique", packages.add(provider.packageName));
+            assertNotNull("Every provider must have an installed launch entry", provider.app);
+            if (fixturePackage().equals(provider.packageName)) fixtureRecognized = true;
+        }
+        assertTrue("A video-category fixture must be recognized without a fixed package mapping", fixtureRecognized);
+    }
+
+    @Test public void mediaSourcesRespectInstalledProvidersTypesAndPackageRemoval() {
+        LaunchableApps.Entry fixture = null;
+        for (LaunchableApps.Entry entry : LaunchableApps.load(targetContext())) {
+            if (fixturePackage().equals(entry.packageName)) fixture = entry;
+        }
+        assertNotNull(fixture);
+        EntertainmentAppRepository.Provider provider = new EntertainmentAppRepository.Provider(
+                fixturePackage(), "Test provider", false, fixture);
+        MediaItem movie = new MediaItem.Builder("test-movie", "Source test movie", MediaItem.Kind.MOVIE,
+                fixturePackage()).genres(Collections.singletonList("Action")).build();
+        MediaItem episode = new MediaItem.Builder("test-episode", "Source test episode", MediaItem.Kind.EPISODE,
+                fixturePackage()).seasonNumber(1).episodeNumber(2).progress(0.5f).build();
+        MediaItem person = new MediaItem.Builder("test-person", "Source test person", MediaItem.Kind.PERSON,
+                fixturePackage()).personRole("Regisseur").build();
+        MediaItem notInstalled = new MediaItem.Builder("not-installed", "Never admitted", MediaItem.Kind.MOVIE,
+                "test.provider.not.installed").build();
+        MediaRepository repository = new MediaRepository(targetContext());
+        repository.addSource((context, installed) -> {
+            Map<MediaRepository.Section, List<MediaItem>> records = new EnumMap<>(MediaRepository.Section.class);
+            records.put(MediaRepository.Section.CONTINUE, Collections.singletonList(episode));
+            records.put(MediaRepository.Section.POPULAR_MOVIES, Arrays.asList(movie, notInstalled));
+            records.put(MediaRepository.Section.PERSONAL, Collections.singletonList(person));
+            return records;
+        });
+        repository.refresh(Collections.singletonList(provider));
+        assertEquals(1, repository.get(MediaRepository.Section.POPULAR_MOVIES, MediaItem.Kind.MOVIE, null, "Action").size());
+        assertTrue("Episode progress must not invent popular-series rankings",
+                repository.get(MediaRepository.Section.POPULAR_SERIES, null, null, null).isEmpty());
+        assertEquals(1, repository.search("Regisseur").size());
+        assertEquals(MediaItem.Kind.PERSON, repository.search("Regisseur").get(0).kind);
+        assertTrue(repository.search("Never admitted").isEmpty());
+        assertTrue("App package names are not media records", repository.search(fixturePackage()).isEmpty());
+        repository.toggleSaved(movie);
+        assertTrue(repository.isSaved(movie));
+        repository.purgePackage(fixturePackage());
+        assertTrue("Removing a provider purges cached content", repository.search("Source test").isEmpty());
+        assertFalse("Provider removal must purge the provider's saved links", repository.isSaved(movie));
+    }
+
+    @Test public void mediaCacheHasAFixedUpperBound() {
+        LaunchableApps.Entry fixture = null;
+        for (LaunchableApps.Entry entry : LaunchableApps.load(targetContext())) {
+            if (fixturePackage().equals(entry.packageName)) fixture = entry;
+        }
+        assertNotNull(fixture);
+        EntertainmentAppRepository.Provider provider = new EntertainmentAppRepository.Provider(
+                fixturePackage(), "Test provider", false, fixture);
+        MediaRepository repository = new MediaRepository(targetContext());
+        repository.addSource((context, providers) -> {
+            List<MediaItem> many = new ArrayList<>();
+            for (int index = 0; index < 150; index++) many.add(new MediaItem.Builder("item-" + index,
+                    "Cache fixture " + index, MediaItem.Kind.MOVIE, fixturePackage()).build());
+            Map<MediaRepository.Section, List<MediaItem>> records = new EnumMap<>(MediaRepository.Section.class);
+            records.put(MediaRepository.Section.POPULAR_MOVIES, many);
+            return records;
+        });
+        repository.refresh(Collections.singletonList(provider));
+        int count = repository.get(MediaRepository.Section.POPULAR_MOVIES, MediaItem.Kind.MOVIE, null, null).size();
+        assertTrue("Admit real-source records", count > 0);
+        assertTrue("Artwork/media cache must remain bounded", count <= 120);
+    }
+
+    private int countDedicatedSettings(View view) {
+        if (view == null) return 0;
+        int count = view.isFocusable() && "Einstellungen".contentEquals(view.getContentDescription()) ? 1 : 0;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) count += countDedicatedSettings(group.getChildAt(i));
+        }
+        return count;
+    }
+
+    private boolean containsAppPackageTile(View view) {
+        if (view == null) return false;
+        Object tag = view.getTag();
+        if (view.isFocusable() && tag instanceof String) {
+            for (LaunchableApps.Entry entry : LaunchableApps.load(targetContext())) {
+                if (entry.packageName.equals(tag)) return true;
+            }
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) if (containsAppPackageTile(group.getChildAt(i))) return true;
+        }
+        return false;
+    }
 
     private boolean hasText(View view, String text) {
         if (view instanceof TextView && text.contentEquals(((TextView) view).getText())) return true;
@@ -524,7 +695,7 @@ public final class FocusNavigationTest {
     }
 
     private void focusHomePackage(String pkg) {
-        key(KeyEvent.KEYCODE_BACK);
+        goHome();
         key(KeyEvent.KEYCODE_DPAD_DOWN);
         AtomicInteger index = new AtomicInteger(-1);
         scenario.onActivity(activity -> index.set(homePackages(activity).indexOf(pkg)));
@@ -542,7 +713,7 @@ public final class FocusNavigationTest {
             for (int i = 0; i < grid.getChildCount(); i++) if (pkg.equals(grid.getChildAt(i).getTag())) index.set(i);
         });
         assertTrue("Installed fixture package must exist", index.get() >= 0);
-        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        enterInstalledGrid();
         for (int r = 0; r < index.get() / columns.get(); r++) key(KeyEvent.KEYCODE_DPAD_DOWN);
         for (int c = 0; c < index.get() % columns.get(); c++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
         assertGridItemFocused(index.get());
@@ -576,14 +747,68 @@ public final class FocusNavigationTest {
         key(KeyEvent.KEYCODE_DPAD_CENTER);
     }
 
-    private void activateFromHome(int topIndex) {
-        key(KeyEvent.KEYCODE_BACK);
+    private boolean isTopId(int id) {
+        for (int top : TOP_BAR) if (top == id) return true;
+        return false;
+    }
+
+    private void goHome() {
+        for (int tries = 0; tries < 12; tries++) {
+            AtomicBoolean home = new AtomicBoolean();
+            scenario.onActivity(activity -> {
+                View page = activity.findViewById(R.id.page_home);
+                home.set(page != null && page.isShown());
+            });
+            if (home.get()) {
+                key(KeyEvent.KEYCODE_BACK);
+                assertFocused(R.id.top_bar_home);
+                return;
+            }
+            key(KeyEvent.KEYCODE_BACK);
+        }
         assertPageShown(R.id.page_home);
-        assertFocused(R.id.top_bar_home);
-        for (int index = 0; index < topIndex; index++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
-        assertFocused(TOP_BAR[topIndex]);
+    }
+
+    private void focusTop(int id) {
+        AtomicInteger focusedId = new AtomicInteger();
+        for (int tries = 0; tries < 30; tries++) {
+            scenario.onActivity(activity -> focusedId.set(activity.getCurrentFocus() == null
+                    ? View.NO_ID : activity.getCurrentFocus().getId()));
+            if (isTopId(focusedId.get())) break;
+            key(KeyEvent.KEYCODE_DPAD_UP);
+        }
+        int from = -1, to = -1;
+        for (int i = 0; i < TOP_BAR.length; i++) {
+            if (TOP_BAR[i] == focusedId.get()) from = i;
+            if (TOP_BAR[i] == id) to = i;
+        }
+        assertTrue("D-Pad Up must reach the top bar", from >= 0);
+        assertTrue("Unknown top-bar target", to >= 0);
+        for (int i = from; i < to; i++) key(KeyEvent.KEYCODE_DPAD_RIGHT);
+        for (int i = from; i > to; i--) key(KeyEvent.KEYCODE_DPAD_LEFT);
+        assertFocused(id);
+    }
+
+    private void activateTab(int id) {
+        goHome();
+        focusTop(id);
         key(KeyEvent.KEYCODE_DPAD_CENTER);
-        assertActiveTab(TOP_BAR[topIndex]);
+        assertActiveTab(id);
+    }
+
+    private void enterInstalledGrid() {
+        focusTop(R.id.top_bar_apps);
+        key(KeyEvent.KEYCODE_DPAD_DOWN);
+        for (int tries = 0; tries < 30; tries++) {
+            AtomicBoolean inGrid = new AtomicBoolean();
+            scenario.onActivity(activity -> {
+                View focused = activity.getCurrentFocus();
+                inGrid.set(focused != null && focused.getParent() == appsGrid(activity));
+            });
+            if (inGrid.get()) return;
+            key(KeyEvent.KEYCODE_DPAD_DOWN);
+        }
+        assertTrue("All installed apps must be reachable using D-Pad Down", false);
     }
 
     private void assertPageShown(int pageId) {

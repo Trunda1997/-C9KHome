@@ -18,4 +18,17 @@
     <item name="live_tv_open" type="id" />
     <item name="favorites_sort_hint" type="id" />
     <item name="system_row" type="id" />
+    <item name="top_bar_search" type="id" />
+    <item name="page_search" type="id" />
+    <item name="page_genre" type="id" />
+    <item name="page_detail" type="id" />
+    <item name="media_search_input" type="id" />
+    <item name="media_search_submit" type="id" />
+    <item name="media_search_results" type="id" />
+    <item name="genres_results" type="id" />
+    <item name="apps_search_input" type="id" />
+    <item name="apps_search_submit" type="id" />
+    <item name="apps_categories" type="id" />
+    <item name="apps_clear_search" type="id" />
+    <item name="store_search" type="id" />
 </resources>
